@@ -1,0 +1,24 @@
+{
+  "name": "flashcards",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "marked": "^16.2.0",
+    "next": "15.5.0",
+    "node-fetch": "^3.3.2",
+    "ollama": "^0.5.17",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "tailwindcss": "^4"
+  }
+}
