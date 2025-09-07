@@ -2,9 +2,10 @@
 import React, { useState } from "react";
 
 const FlashcardGenerator = () => {
-  const [subject, setSubject] = useState("");
+  const [keyWords, setKeyWords] = useState("");
+  const [inputValue, setInputValue] = useState("");
   const [level, setLevel] = useState("");
-  const [examType, setExamType] = useState("flashcards");
+  const [tld, setTld] = useState([]);
   const [focusArea, setFocusArea] = useState("");
   const [numCards, setNumCards] = useState(10);
   const [loading, setLoading] = useState(false);
@@ -16,16 +17,17 @@ const FlashcardGenerator = () => {
     setError(null);
     setItems([]);
 
-    const content = `Please make ${numCards} ${examType} questions for a ${subject} exam with a focus area of ${focusArea} with an academic level of ${level}.`;
+    const content = `Help me with my business idea and domain names. Generate me some potential domain names based off these words ${keyWords}.`;
 
     const requestData = {
       messages: [
         {
           role: "system",
-          content: `You are a tutor. Respond ONLY in valid JSON.
-If exam type = flashcards: return an array of {question, answer}.
-If exam type = multiple-choice: return an array of {question, options:[], answer}.
-If exam type = true-false: return an array of {question, options:[True,False], answer:True|False}.`,
+          content: `You are a business and domain name advisor. Respond ONLY in valid JSON.
+- Provide domain name suggestions based on the user's business idea or keywords.
+- Include a field "domain" with the suggested name, "tld" with a recommended TLD, and "reason" explaining why it's a good choice.
+- If needed return whether or not the name is available
+- Always return an array of suggestions.`,
         },
         { role: "user", content },
       ],
@@ -34,6 +36,7 @@ If exam type = true-false: return an array of {question, options:[True,False], a
     };
 
     try {
+      console.log(keyWords);
       const response = await fetch("http://localhost:4000/quiz", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -42,8 +45,6 @@ If exam type = true-false: return an array of {question, options:[True,False], a
       if (!response.ok) throw new Error("Failed to generate");
 
       const data = await response.json();
-      console.log("raw response", data);
-
       let parsed;
       try {
         parsed = JSON.parse(data.message.content);
@@ -57,205 +58,80 @@ If exam type = true-false: return an array of {question, options:[True,False], a
       setLoading(false);
     }
   };
-
-  const [flipped, setFlipped] = useState({});
-
-  const handleClick = (i) => {
-    setFlipped((prev) => ({ ...prev, [i]: !prev[i] }));
-  };
-
-  const renderFlashcards = () => (
-    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {items.map((card, i) => {
-        const text = flipped[i] ? card.answer : card.question;
-
-        return (
-          <div
-            key={i}
-            className="p-4 border rounded-lg shadow-sm bg-indigo-50 hover:shadow-md transition cursor-pointer"
-            onClick={() => handleClick(i)}
-          >
-            <p className="font-bold text-indigo-800 mb-2">
-              Q{i + 1}: {text}
-            </p>
-          </div>
-        );
-      })}
-    </div>
-  );
-
-  const [selectedAnswers, setSelectedAnswers] = useState({});
-
-  const renderMultipleChoice = () => (
-    <div className="space-y-4">
-      {items.map((q, i) => (
-        <div
-          key={i}
-          className="p-4 border rounded-lg shadow bg-white hover:shadow-md transition"
-        >
-          <p className="font-bold text-indigo-800 mb-3">
-            {i + 1}. {q.question}
-          </p>
-
-          {q.options && Array.isArray(q.options) ? (
-            <ul className="space-y-2">
-              {q.options.map((opt, j) => {
-                const isSelected = selectedAnswers[i] === opt;
-                const isCorrect = opt === q.answer;
-
-                return (
-                  <li
-                    key={j}
-                    onClick={() =>
-                      setSelectedAnswers((prev) => ({ ...prev, [i]: opt }))
-                    }
-                    className={`px-3 py-2 rounded border cursor-pointer transition
-                    ${
-                      isSelected
-                        ? "bg-indigo-100 border-indigo-500"
-                        : "border-gray-300"
-                    }
-                    ${
-                      isSelected && !isCorrect
-                        ? "bg-red-100 border-red-500"
-                        : ""
-                    }
-                  `}
-                  >
-                    {opt}
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="text-gray-500">No options provided</p>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-
-  const renderTrueFalse = () => (
-    <div className="space-y-4">
-      {items.map((q, i) => (
-        <div
-          key={i}
-          className="p-4 border rounded-lg shadow bg-white hover:shadow-md transition"
-        >
-          <p className="font-bold text-indigo-800 mb-3">
-            {i + 1}. {q.question}
-          </p>
-
-          {q.options && Array.isArray(q.options) ? (
-            <ul className="space-y-2">
-              {q.options.map((opt, j) => {
-                const isSelected = selectedAnswers[i] === opt;
-                const isCorrect =
-                  String(opt).toLowerCase() === String(q.answer).toLowerCase();
-
-                return (
-                  <li
-                    key={j}
-                    onClick={() =>
-                      setSelectedAnswers((prev) => ({ ...prev, [i]: opt }))
-                    }
-                    className={`px-3 py-2 rounded border cursor-pointer transition
-                    ${
-                      isSelected
-                        ? "bg-indigo-100 border-indigo-500"
-                        : "border-gray-300"
-                    }
-                    ${
-                      isSelected && !isCorrect
-                        ? "bg-red-100 border-red-500"
-                        : ""
-                    }
-                  `}
-                  >
-                    {String(opt)}
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="text-gray-500">No options provided</p>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-
   return (
-    <div className="bg-gray-100 min-h-screen flex flex-col md:flex-row gap-6 items-stretch p-6">
-      {/* Sidebar form */}
-      <div className="bg-white p-6 rounded-lg shadow-lg w-full md:w-96">
+    <div className="bg-gray-900 min-h-screen flex flex-col md:flex-row gap-6 items-stretch p-6 text-gray-100">
+      <div className="bg-gray-800 p-6 rounded-lg shadow-lg w-full md:w-96">
         <h2 className="text-2xl font-semibold text-center mb-6">
-          Generate Exam Questions
+          Generate Domain Names
         </h2>
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Subject
+            <label className="block text-sm font-medium text-gray-300">
+              Key Words
             </label>
             <input
               type="text"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              className="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-md"
-              placeholder="e.g. Human Anatomy"
+              value={keyWords}
+              onChange={(e) => setKeyWords(e.target.value)}
+              className="mt-1 block w-full px-4 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 placeholder-gray-400"
+              placeholder="e.g. adventure, fun, gear rental, roam"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Academic Level
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Top Level Domain
             </label>
-            <input
-              type="text"
-              value={level}
-              onChange={(e) => setLevel(e.target.value)}
-              className="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-md"
-              placeholder="e.g. Collegiate"
-            />
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {[".com", ".net", ".org", ".app", ".info", "Any"].map((type) => (
+                <label
+                  key={type}
+                  className="flex items-center space-x-2 px-3 py-2 bg-gray-800 rounded-lg border border-gray-600 cursor-pointer hover:bg-gray-700 transition"
+                >
+                  <input
+                    type="checkbox"
+                    value={type}
+                    checked={tld.includes(type)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setTld((prev) =>
+                        prev.includes(value)
+                          ? prev.filter((v) => v !== value)
+                          : [...prev, value]
+                      );
+                    }}
+                    className="h-4 w-4 text-indigo-500 bg-gray-700 border-gray-600 rounded focus:ring-indigo-500"
+                  />
+                  <span className="text-gray-100">
+                    {type.replace("-", " ")}
+                  </span>
+                </label>
+              ))}
+            </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Exam Type
-            </label>
-            <select
-              value={examType}
-              onChange={(e) => setExamType(e.target.value)}
-              className="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-md"
-            >
-              <option value="flashcards">Flashcards</option>
-              <option value="multiple-choice">Multiple Choice</option>
-              <option value="true-false">True/False</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-gray-300">
               Focus Area
             </label>
             <input
               type="text"
               value={focusArea}
               onChange={(e) => setFocusArea(e.target.value)}
-              className="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-md"
+              className="mt-1 block w-full px-4 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 placeholder-gray-400"
               placeholder="e.g. Muscular System"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-sm font-medium text-gray-300">
               Number of Questions
             </label>
             <input
               type="number"
               value={numCards}
               onChange={(e) => setNumCards(e.target.value)}
-              className="mt-1 block w-full px-4 py-2 border border-gray-300 rounded-md"
+              className="mt-1 block w-full px-4 py-2 border border-gray-600 rounded-md bg-gray-700 text-gray-100 placeholder-gray-400"
               min="1"
             />
           </div>
@@ -263,7 +139,7 @@ If exam type = true-false: return an array of {question, options:[True,False], a
           <button
             onClick={generateCards}
             disabled={loading}
-            className="w-full py-2 px-4 mt-4 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+            className="w-full py-2 px-4 mt-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition"
           >
             {loading ? "Generating..." : "Generate"}
           </button>
@@ -272,10 +148,10 @@ If exam type = true-false: return an array of {question, options:[True,False], a
         </div>
       </div>
 
-      <div className="flex-1 bg-white p-6 rounded-lg shadow-lg overflow-auto">
+      <div className="flex-1 bg-gray-800 p-6 rounded-lg shadow-lg overflow-auto">
         {items.length > 0 ? (
           <>
-            <h3 className="font-semibold mb-4 text-xl border-b pb-2">
+            <h3 className="font-semibold mb-4 text-xl border-b border-gray-700 pb-2">
               Generated {examType}:
             </h3>
             {examType === "flashcards" && renderFlashcards()}
@@ -283,7 +159,7 @@ If exam type = true-false: return an array of {question, options:[True,False], a
             {examType === "true-false" && renderTrueFalse()}
           </>
         ) : (
-          <p className="text-gray-500">
+          <p className="text-gray-400">
             Questions will appear here after generation.
           </p>
         )}
