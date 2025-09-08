@@ -20,7 +20,8 @@ const DomainGenerator = () => {
       messages: [
         {
           role: "system",
-          content: `You are a business and domain name advisor. Respond ONLY in valid JSON. Provide domain name suggestions based on the user's business idea or keywords.Include a field "domain" with the suggested name, "tld" with a recommended TLD, and "reason" explaining why it's a good choice. If needed return whether or not the name is available.  Always return an array of suggestions.`,
+          content: `You are a business and domain name advisor. Respond ONLY in valid JSON in this format {"suggestions":[{"domain":"...", "tld":".com", "reason":"...","available":true},...]}
+Do not include any text outside the JSON.  Provide domain name suggestions based on the user's business idea or keywords.Include a field "domain" with the suggested name, "tld" with a recommended TLD, and "reason" explaining why it's a good choice. If needed return whether or not the name is available.  Always return an array of suggestions.`,
         },
         { role: "user", content },
       ],
@@ -39,10 +40,13 @@ const DomainGenerator = () => {
 
       const data = await response.json();
       let parsed;
-      console.log(parsed);
       try {
-        parsed = JSON.parse(data.message.content);
-        setItems(parsed);
+        parsed =
+          typeof data.message.content === "string"
+            ? JSON.parse(data.message.content)
+            : data.message.content;
+        setItems(parsed.suggestions || []);
+        console.log(parsed.suggestions);
       } catch (err) {
         throw new Error("Model did not return valid JSON");
       }
@@ -152,8 +156,33 @@ const DomainGenerator = () => {
         {items.length > 0 ? (
           <>
             <h3 className="font-semibold mb-4 text-xl border-b border-gray-700 pb-2">
-              Generated:
+              Generated Domains:
             </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {items.map((item) => (
+                <div
+                  key={item.domain}
+                  className="bg-gray-700 p-4 rounded-lg shadow hover:shadow-md transition"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-lg font-semibold text-indigo-400">
+                      {item.domain}
+                      {item.tld}
+                    </h4>
+                    <span
+                      className={`px-2 py-1 text-xs rounded-full ${
+                        item.available
+                          ? "bg-green-500 text-gray-900"
+                          : "bg-red-500 text-gray-100"
+                      }`}
+                    >
+                      {item.available ? "Available" : "Taken"}
+                    </span>
+                  </div>
+                  <p className="text-gray-300 text-sm">{item.reason}</p>
+                </div>
+              ))}
+            </div>
           </>
         ) : (
           <p className="text-gray-400">

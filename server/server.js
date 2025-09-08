@@ -169,7 +169,6 @@ async function processToolCalls(messages, tools, modeluse) {
         util.inspect(newMessages.slice(-1), false, null, true)
       );
 
-      // recursively process until no more tools are called
       let nextResult = await processToolCalls(newMessages, tools);
 
       return {
@@ -200,12 +199,13 @@ app.post("/domains", async (req, res) => {
     console.log("im here");
     const result = await processToolCalls(
       requestData.messages,
-      tools,
+      [],
       requestData.model
     );
     console.log("im here 2");
+    console.log(result.message);
 
-    res.json(result.message);
+    res.json({ message: { content: result.message.content } });
   } catch (error) {
     console.error("Error proxying to golem:", error);
     res.status(500).json({ error: "Failed to fetch from golem" });
