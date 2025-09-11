@@ -2,6 +2,10 @@ const express = require("express");
 const cors = require("cors");
 const { Ollama } = require("ollama");
 const util = require("util");
+const path = require("path");
+const dotenv = require("dotenv");
+
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const API_KEY = process.env.API_KEY;
 const BASE_URL = "https://domainr.p.rapidapi.com/v2";
@@ -78,22 +82,33 @@ const getDomainStatusToolSchema = {
   },
 };
 async function searchDomains(query) {
-  const url = `https://domainr.p.rapidapi.com/v2/search?query=${encodeURIComponent(
-    query
-  )}`;
-  const response = await fetch(url, {
-    headers: {
-      "X-RapidAPI-Key": API_KEY,
-      "X-RapidAPI-Host": "domainr.p.rapidapi.com",
-    },
-  });
-  console.log("searching");
-  if (!response.ok) {
-    throw new Error(
-      `Error fetching search results: ${response.status} ${response.statusText}`
-    );
+  try {
+    console.log("AQUI1");
+    const url = `https://domainr.p.rapidapi.com/v2/search?query=${encodeURIComponent(
+      query
+    )}`;
+
+    const response = await fetch(url, {
+      headers: {
+        "X-RapidAPI-Key": API_KEY,
+        "X-RapidAPI-Host": "domainr.p.rapidapi.com",
+      },
+    });
+
+    console.log("searching");
+
+    if (!response.ok) {
+      throw new Error(
+        `Error fetching search results: ${response.status} ${response.statusText}`
+      );
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error in searchDomains:", error.message);
+    throw error; // re-throw so calling function can handle it
   }
-  return response.json();
 }
 
 async function getDomainStatus(domain) {
@@ -114,49 +129,43 @@ async function getDomainStatus(domain) {
   return response.json();
 }
 
-async function processToolCalls(messages, tools, modeluse) {
+async function processToolCalls(messages, tools, model) {
+  console.log("hellp");
   console.log(messages);
+  console.log(tools);
   const response = await ollama.chat({
-    model: modeluse,
-    messages,
-    tools,
+    model: model,
+    messages: messages,
+    tools: tools,
     stream: false,
   });
-  console.log("GOT IT");
+  console.log("LLM response:", util.inspect(response, false, null, true));
 
   if (
     response.message &&
     response.message.tool_calls &&
     response.message.tool_calls.length > 0
   ) {
+    // the LLM decided to respond with a tool call request
+
     let toolCall = response.message.tool_calls[0];
-    let toolName = toolCall.function.name;
-    let args = toolCall.function.arguments;
-    console.log("here");
-    if (typeof args === "string") {
-      try {
-        args = JSON.parse(args);
-      } catch (e) {
-        console.error("Failed to parse tool arguments:", e, args);
-        args = {};
-      }
-    }
-
-    const toolMap = {
-      searchDomains: async (args) => await searchDomains(args.query),
-      getDomainStatus: async (args) => await getDomainStatus(args.domain),
-    };
-
-    if (toolMap[toolName]) {
-      let toolResult = await toolMap[toolName](args);
+    console.log(tool_call);
+    if (toolCall.function.name == "searchDomains") {
+      // call the tool!
+      let weatherData = await searchDomains(toolCall.function.arguments.query);
 
       let newMessages = [
+        // previous messages:
         ...messages,
+
+        // the tool call message:
         response.message,
+
+        // the tool result message:
         {
           role: "tool",
-          tool_name: toolName,
-          content: JSON.stringify(toolResult),
+          tool_name: toolCall.function.name,
+          content: JSON.stringify(weatherData),
         },
       ];
 
@@ -173,14 +182,17 @@ async function processToolCalls(messages, tools, modeluse) {
 
       return {
         message: nextResult.message,
+
+        // for debugging:
         toolCalls: [toolCall, ...nextResult.toolCalls],
-        toolResults: [toolResult, ...nextResult.toolResults],
+        toolResults: [weatherData, ...nextResult.toolResults],
       };
     } else {
-      console.log("Unknown tool called:", toolName);
+      console.log("Unknown tool called:", toolCall.function.name);
     }
   }
 
+  // the LLM either didn't request a tool call or called an unrecognized tool
   return {
     message: response.message,
     toolCalls: [],
@@ -192,14 +204,19 @@ app.post("/domains", async (req, res) => {
   try {
     const requestData = req.body;
 
-    console.log("Reuest data:", requestData);
+    console.log("Reuest data:", requestData.messages);
+
+    console.log("KEY", API_KEY);
+
+    let resp = await searchDomains("acme");
+    console.log(resp);
 
     const tools = [searchDomainToolSchema, getDomainStatusToolSchema];
 
     console.log("im here");
     const result = await processToolCalls(
       requestData.messages,
-      [],
+      [searchDomainToolSchema],
       requestData.model
     );
     console.log("im here 2");

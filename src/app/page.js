@@ -15,6 +15,7 @@ const DomainGenerator = () => {
     setItems([]);
 
     const content = `Help me with my business idea and domain names. Generate me some potential domain names based off these words ${keyWords}. I want the domain to be available with these tlds, ${tld} and this vibe ${vibe}`;
+    //const content = "what is weather like in st george ut today";
 
     const requestData = {
       messages: [
@@ -25,7 +26,7 @@ Do not include any text outside the JSON.  Provide domain name suggestions based
         },
         { role: "user", content },
       ],
-      model: "gpt-oss:120b",
+      model: "gpt-oss:20b",
       stream: false,
     };
 
