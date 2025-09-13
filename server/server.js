@@ -82,33 +82,35 @@ const getDomainStatusToolSchema = {
   },
 };
 async function searchDomains(query) {
-  try {
-    console.log("AQUI1");
-    const url = `https://domainr.p.rapidapi.com/v2/search?query=${encodeURIComponent(
-      query
-    )}`;
+  console.log("HELLO");
+  return;
+  // try {
+  //   console.log("AQUI1");
+  //   const url = `https://domainr.p.rapidapi.com/v2/search?query=${encodeURIComponent(
+  //     query
+  //   )}`;
 
-    const response = await fetch(url, {
-      headers: {
-        "X-RapidAPI-Key": API_KEY,
-        "X-RapidAPI-Host": "domainr.p.rapidapi.com",
-      },
-    });
+  //   const response = await fetch(url, {
+  //     headers: {
+  //       "X-RapidAPI-Key": API_KEY,
+  //       "X-RapidAPI-Host": "domainr.p.rapidapi.com",
+  //     },
+  //   });
 
-    console.log("searching");
+  //   console.log("searching");
 
-    if (!response.ok) {
-      throw new Error(
-        `Error fetching search results: ${response.status} ${response.statusText}`
-      );
-    }
+  //   if (!response.ok) {
+  //     throw new Error(
+  //       `Error fetching search results: ${response.status} ${response.statusText}`
+  //     );
+  //   }
 
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Error in searchDomains:", error.message);
-    throw error; // re-throw so calling function can handle it
-  }
+  //   const data = await response.json();
+  //   return data;
+  // } catch (error) {
+  //   console.error("Error in searchDomains:", error.message);
+  //   throw error; // re-throw so calling function can handle it
+  // }
 }
 
 async function getDomainStatus(domain) {
@@ -149,7 +151,7 @@ async function processToolCalls(messages, tools, model) {
     // the LLM decided to respond with a tool call request
 
     let toolCall = response.message.tool_calls[0];
-    console.log(tool_call);
+    console.log(toolCall);
     if (toolCall.function.name == "searchDomains") {
       // call the tool!
       let weatherData = await searchDomains(toolCall.function.arguments.query);
@@ -178,7 +180,7 @@ async function processToolCalls(messages, tools, model) {
         util.inspect(newMessages.slice(-1), false, null, true)
       );
 
-      let nextResult = await processToolCalls(newMessages, tools);
+      let nextResult = await processToolCalls(newMessages, tools, model);
 
       return {
         message: nextResult.message,
