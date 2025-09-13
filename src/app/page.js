@@ -36,6 +36,7 @@ Do not include any text outside the JSON.  Provide domain name suggestions based
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestData),
+        credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to generate");
 

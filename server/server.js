@@ -29,19 +29,10 @@ app.use((req, res, next) => {
 
 app.use(cors(corsOptions));
 
-app.options("*", (req, res) => {
-  console.log("Preflight Request Detected");
-  res.header("Access-Control-Allow-Origin", "http://localhost:3000");
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.status(200).end();
-});
+app.options("*", cors(corsOptions));
 
-app.use((req, res, next) => {
-  console.log("CORS Middleware");
-  res.header("Access-Control-Allow-Credentials", "true");
-  next();
-});
-const ollama = new Ollama({ host: "http://100.64.0.1:11434" });
+//const ollama = new Ollama({ host: "http://100.64.0.1:11434" });
+const ollama = new Ollama({ host: "http://localhost:11434" });
 
 const searchDomainToolSchema = {
   type: "function",
@@ -83,34 +74,33 @@ const getDomainStatusToolSchema = {
 };
 async function searchDomains(query) {
   console.log("HELLO");
-  return;
-  // try {
-  //   console.log("AQUI1");
-  //   const url = `https://domainr.p.rapidapi.com/v2/search?query=${encodeURIComponent(
-  //     query
-  //   )}`;
+  try {
+    console.log("AQUI1");
+    const url = `https://domainr.p.rapidapi.com/v2/search?query=${encodeURIComponent(
+      query
+    )}`;
 
-  //   const response = await fetch(url, {
-  //     headers: {
-  //       "X-RapidAPI-Key": API_KEY,
-  //       "X-RapidAPI-Host": "domainr.p.rapidapi.com",
-  //     },
-  //   });
+    const response = await fetch(url, {
+      headers: {
+        "X-RapidAPI-Key": API_KEY,
+        "X-RapidAPI-Host": "domainr.p.rapidapi.com",
+      },
+    });
 
-  //   console.log("searching");
+    console.log("searching");
 
-  //   if (!response.ok) {
-  //     throw new Error(
-  //       `Error fetching search results: ${response.status} ${response.statusText}`
-  //     );
-  //   }
+    if (!response.ok) {
+      throw new Error(
+        `Error fetching search results: ${response.status} ${response.statusText}`
+      );
+    }
 
-  //   const data = await response.json();
-  //   return data;
-  // } catch (error) {
-  //   console.error("Error in searchDomains:", error.message);
-  //   throw error; // re-throw so calling function can handle it
-  // }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error in searchDomains:", error.message);
+    throw error; // re-throw so calling function can handle it
+  }
 }
 
 async function getDomainStatus(domain) {
@@ -132,71 +122,74 @@ async function getDomainStatus(domain) {
 }
 
 async function processToolCalls(messages, tools, model) {
-  console.log("hellp");
-  console.log(messages);
-  console.log(tools);
+  console.log("I AM HERE");
+  console.log("Calling Ollama...");
   const response = await ollama.chat({
-    model: model,
-    messages: messages,
-    tools: tools,
+    model,
+    messages,
+    tools,
     stream: false,
   });
+  console.log("Ollama finished");
+
   console.log("LLM response:", util.inspect(response, false, null, true));
 
-  if (
-    response.message &&
-    response.message.tool_calls &&
-    response.message.tool_calls.length > 0
-  ) {
-    // the LLM decided to respond with a tool call request
+  if (response.message?.tool_calls?.length > 0) {
+    const toolCall = response.message.tool_calls[0];
 
-    let toolCall = response.message.tool_calls[0];
-    console.log(toolCall);
-    if (toolCall.function.name == "searchDomains") {
-      // call the tool!
-      let weatherData = await searchDomains(toolCall.function.arguments.query);
+    if (toolCall.function.name === "searchDomains") {
+      const data = await searchDomains(toolCall.function.arguments.query);
 
-      let newMessages = [
-        // previous messages:
-        ...messages,
-
-        // the tool call message:
-        response.message,
-
-        // the tool result message:
-        {
-          role: "tool",
-          tool_name: toolCall.function.name,
-          content: JSON.stringify(weatherData),
-        },
-      ];
-
-      console.log(
-        "LLM tool requested:",
-        util.inspect(response.message, false, null, true)
-      );
-      console.log(
-        "LLM tool called:",
-        util.inspect(newMessages.slice(-1), false, null, true)
-      );
-
-      let nextResult = await processToolCalls(newMessages, tools, model);
+      const suggestions = (data.results || []).map((r) => {
+        const domain = r.domain || "";
+        const tld = domain.includes(".") ? "." + domain.split(".").pop() : "";
+        return {
+          domain: domain.replace(tld, ""),
+          tld: tld || ".com",
+          reason: "Suggested by Domainr API",
+          available: !(r.subdomain || r.host),
+        };
+      });
 
       return {
-        message: nextResult.message,
-
-        // for debugging:
-        toolCalls: [toolCall, ...nextResult.toolCalls],
-        toolResults: [weatherData, ...nextResult.toolResults],
+        message: {
+          role: "assistant",
+          content: JSON.stringify({ suggestions }, null, 2),
+        },
+        toolCalls: [toolCall],
+        toolResults: [data],
       };
-    } else {
-      console.log("Unknown tool called:", toolCall.function.name);
+    }
+
+    if (toolCall.function.name === "getDomainStatus") {
+      const data = await getDomainStatus(toolCall.function.arguments.domain);
+
+      const suggestions = (data.status || []).map((s) => {
+        return {
+          domain: s.domain || toolCall.function.arguments.domain,
+          tld: s.domain?.includes(".") ? "." + s.domain.split(".").pop() : "",
+          reason: `Status check for ${s.domain}`,
+          available:
+            s.status?.includes("inactive") || s.status?.includes("undelegated"),
+        };
+      });
+
+      return {
+        message: {
+          role: "assistant",
+          content: JSON.stringify({ suggestions }, null, 2),
+        },
+        toolCalls: [toolCall],
+        toolResults: [data],
+      };
     }
   }
 
-  // the LLM either didn't request a tool call or called an unrecognized tool
   return {
-    message: response.message,
+    message: {
+      role: "assistant",
+      content: JSON.stringify({ suggestions: [] }, null, 2),
+    },
     toolCalls: [],
     toolResults: [],
   };
@@ -209,9 +202,6 @@ app.post("/domains", async (req, res) => {
     console.log("Reuest data:", requestData.messages);
 
     console.log("KEY", API_KEY);
-
-    let resp = await searchDomains("acme");
-    console.log(resp);
 
     const tools = [searchDomainToolSchema, getDomainStatusToolSchema];
 
@@ -230,6 +220,15 @@ app.post("/domains", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch from golem" });
   }
 });
+
+// app.post("/domains", (req, res) => {
+//   res.json({
+//     message: {
+//       content:
+//         '{"suggestions":[{"domain":"test","tld":".com","reason":"demo","available":true}]}',
+//     },
+//   });
+// });
 
 const PORT = 4000;
 app.listen(PORT, () => {
