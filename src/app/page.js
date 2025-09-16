@@ -21,12 +21,26 @@ const DomainGenerator = () => {
       messages: [
         {
           role: "system",
-          content: `You are a business and domain name advisor. Respond ONLY in valid JSON in this format {"suggestions":[{"domain":"...", "tld":".com", "reason":"...","available":true},...]}
-Do not include any text outside the JSON.  Provide domain name suggestions based on the user's business idea or keywords.Include a field "domain" with the suggested name, "tld" with a recommended TLD, and "reason" explaining why it's a good choice. If needed return whether or not the name is available.  Always return an array of suggestions.`,
+          content: `
+You are a business and domain name advisor. 
+Respond ONLY in valid JSON in this format: 
+{"suggestions":[{"domain":"...", "tld":".com", "reason":"...","available":true},...]}
+
+Rules:
+1. Provide EXACTLY 5 domain name suggestions.
+2. Each suggestion must be creative, easy to remember, and brandable.
+3. Use the keywords as inspiration but do NOT just mash them together.
+4. Use the vibe (e.g., Fun, Abstract, Business) only as a STYLE or TONE — never as a literal word in the domain. 
+   - "Fun" → playful, quirky names.
+   - "Abstract" → more conceptual, modern, or artistic names.
+   - "Business" → professional, trustworthy names.
+   - "Any" → free to mix styles.
+5. Each suggestion must include a "reason" that explains the style choice.
+7. Output only JSON, no extra commentary.`,
         },
         { role: "user", content },
       ],
-      model: "gpt-oss:20b",
+      model: "gpt-oss:120b",
       stream: false,
     };
 
@@ -161,9 +175,9 @@ Do not include any text outside the JSON.  Provide domain name suggestions based
               Generated Domains:
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {items.map((item) => (
+              {items.map((item, index) => (
                 <div
-                  key={item.domain}
+                  key={`${item.domain}${item.tld}-${index}`}
                   className="bg-gray-700 p-4 rounded-lg shadow hover:shadow-md transition"
                 >
                   <div className="flex items-center justify-between mb-2">

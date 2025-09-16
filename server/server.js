@@ -31,8 +31,8 @@ app.use(cors(corsOptions));
 
 app.options("*", cors(corsOptions));
 
-//const ollama = new Ollama({ host: "http://100.64.0.1:11434" });
-const ollama = new Ollama({ host: "http://localhost:11434" });
+const ollama = new Ollama({ host: "http://100.64.0.1:11434" });
+//const ollama = new Ollama({ host: "http://localhost:11434" });
 
 const searchDomainToolSchema = {
   type: "function",
@@ -53,22 +53,28 @@ const searchDomainToolSchema = {
     },
   },
 };
-
 const getDomainStatusToolSchema = {
   type: "function",
   function: {
     name: "getDomainStatus",
-    description: "Checks the availability and status of a given domain name.",
+    description:
+      "Checks and returns the availability and status of a list of domain names (up to 5). A status 'inactive' or 'undelegated' means available for registration; 'active' means unavailable. Rate limited to 5 checks.",
     parameters: {
       type: "object",
       properties: {
-        domain: {
-          type: "string",
+        domains: {
+          type: "array",
+          items: {
+            type: "string",
+            description:
+              "A fully qualified domain name to check (e.g., 'acmecoffee.shop').",
+          },
           description:
-            "The fully qualified domain name to check (e.g., 'acmecoffee.shop').",
+            "List of up to 5 domain names to check availability for.",
+          maxItems: 5,
         },
       },
-      required: ["domain"],
+      required: ["domains"],
     },
   },
 };
@@ -103,95 +109,195 @@ async function searchDomains(query) {
   }
 }
 
-async function getDomainStatus(domain) {
-  const url = `${BASE_URL}/status?domain=${encodeURIComponent(domain)}`;
+async function getDomainStatus(domains) {
+  const maxDomains = 5;
+  const results = [];
 
-  const response = await fetch(url, {
-    headers: {
-      "X-RapidAPI-Key": API_KEY,
-      "X-RapidAPI-Host": "domainr.p.rapidapi.com",
-    },
-  });
+  for (const domain of domains.slice(0, maxDomains)) {
+    try {
+      const url = `${BASE_URL}/status?domain=${encodeURIComponent(domain)}`;
+      const response = await fetch(url, {
+        headers: {
+          "X-RapidAPI-Key": API_KEY,
+          "X-RapidAPI-Host": "domainr.p.rapidapi.com",
+        },
+      });
 
-  console.log("statusing");
-  if (!response.ok) {
-    throw new Error(`Error fetching domain status: ${response.statusText}`);
+      console.log("statusing", domain);
+      if (!response.ok) {
+        console.error(
+          `Error fetching status for ${domain}: ${response.statusText}`
+        );
+        results.push({ domain, status: "error", error: response.statusText });
+        continue;
+      }
+
+      const data = await response.json().catch(() => ({}));
+      results.push(...(data.status || [{ domain, status: "error" }]));
+    } catch (error) {
+      console.error(`Error in API call for ${domain}:`, error.message);
+      results.push({ domain, status: "error", error: error.message });
+    }
   }
 
-  return response.json();
+  return { status: results };
 }
 
 async function processToolCalls(messages, tools, model) {
-  console.log("I AM HERE");
   console.log("Calling Ollama...");
+  console.log("message", messages);
+  console.log("tools", tools);
+
+  // Start with a copy of messages to avoid mutating original
+  let conversation = [...messages];
+  const maxToolCalls = 5; // Max API calls to respect rate limit
+  let totalToolCalls = 0;
+  const suggestions = [];
+  const toolResults = [];
+
+  // Helper to extract keywords from user message for better fallbacks
+  const userMessage =
+    conversation.find((msg) => msg.role === "user")?.content || "";
+
+  console.log("USER MESSAGE", userMessage);
+  const match = userMessage.match(
+    /(?:words|keywords|based off these words)\s*([^.]*)/i
+  );
+  const keywords = match?.[1]?.trim().replace(/[^\w\s]/g, "") || "fallback";
+  const getFallbackDomain = (index) => {
+    const parts = keywords.split(/\s+/).slice(0, 2).join("-").toLowerCase();
+    return `${parts}${index}.com`;
+  };
+
+  // Single-turn processing (since we expect one getDomainStatus call with multiple domains)
   const response = await ollama.chat({
     model,
-    messages,
+    messages: conversation,
     tools,
     stream: false,
+    options: { max_tokens: 2000 },
   });
   console.log("Ollama finished");
+  console.log("Ollama response:", util.inspect(response, false, null, true));
+  console.log(
+    "Number of tool calls received:",
+    response.message?.tool_calls?.length || 0
+  );
+  console.log("Model thinking:", response.message?.thinking || "None");
 
-  console.log("LLM response:", util.inspect(response, false, null, true));
+  const assistantMessage = response.message;
+  conversation.push(assistantMessage);
 
-  if (response.message?.tool_calls?.length > 0) {
-    const toolCall = response.message.tool_calls[0];
+  if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+    for (const toolCall of assistantMessage.tool_calls) {
+      if (toolCall.function.name === "getDomainStatus") {
+        const domains = toolCall.function.arguments.domains || [];
+        if (domains.length === 0) {
+          console.log("No domains provided in tool call, skipping.");
+          continue;
+        }
 
-    if (toolCall.function.name === "searchDomains") {
-      const data = await searchDomains(toolCall.function.arguments.query);
+        try {
+          const data = await getDomainStatus(domains);
+          totalToolCalls += Math.min(
+            domains.length,
+            maxToolCalls - totalToolCalls
+          );
 
-      const suggestions = (data.results || []).map((r) => {
-        const domain = r.domain || "";
-        const tld = domain.includes(".") ? "." + domain.split(".").pop() : "";
-        return {
-          domain: domain.replace(tld, ""),
-          tld: tld || ".com",
-          reason: "Suggested by Domainr API",
-          available: !(r.subdomain || r.host),
-        };
-      });
+          // Append tool result to conversation
+          conversation.push({
+            role: "tool",
+            content: JSON.stringify(data),
+            tool_call_id: toolCall.id || `call_${totalToolCalls}`,
+          });
 
-      return {
-        message: {
-          role: "assistant",
-          content: JSON.stringify({ suggestions }, null, 2),
-        },
-        toolCalls: [toolCall],
-        toolResults: [data],
-      };
+          // Add to suggestions
+          suggestions.push(
+            ...(data.status || []).map((s) => ({
+              domain: s.domain
+                ? s.domain.split(".")[0]
+                : domains[0].split(".")[0],
+              tld: s.domain?.includes(".")
+                ? "." + s.domain.split(".").pop()
+                : ".com",
+              reason: `Status check for ${s.domain} (based on keywords: ${keywords})`,
+              available:
+                s.status?.includes("inactive") ||
+                s.status?.includes("undelegated"),
+            }))
+          );
+
+          toolResults.push(data);
+          console.log(`Processed tool call for domains: ${domains.join(", ")}`);
+        } catch (error) {
+          console.error("Error in getDomainStatus tool call:", error);
+          conversation.push({
+            role: "tool",
+            content: JSON.stringify({ error: error.message }),
+            tool_call_id: toolCall.id || `call_${totalToolCalls}`,
+          });
+        }
+      } else if (toolCall.function.name === "searchDomains") {
+        const query = toolCall.function.arguments.query;
+        try {
+          const data = await searchDomains(query);
+          conversation.push({
+            role: "tool",
+            content: JSON.stringify(data),
+            tool_call_id: toolCall.id || `call_${totalToolCalls}`,
+          });
+          toolResults.push({ type: "search", data });
+        } catch (error) {
+          console.error("Error in searchDomains tool call:", error);
+          conversation.push({
+            role: "tool",
+            content: JSON.stringify({ error: error.message }),
+            tool_call_id: toolCall.id || `call_${totalToolCalls}`,
+          });
+        }
+      }
     }
-
-    if (toolCall.function.name === "getDomainStatus") {
-      const data = await getDomainStatus(toolCall.function.arguments.domain);
-
-      const suggestions = (data.status || []).map((s) => {
-        return {
-          domain: s.domain || toolCall.function.arguments.domain,
-          tld: s.domain?.includes(".") ? "." + s.domain.split(".").pop() : "",
-          reason: `Status check for ${s.domain}`,
+  }
+  console.log("SUGGESTIONS", suggestions);
+  // Fallback: Fill to exactly 5 with keyword-based domains if needed
+  while (suggestions.length < 5 && totalToolCalls < maxToolCalls) {
+    const fallbackDomain = getFallbackDomain(suggestions.length + 1);
+    try {
+      const data = await getDomainStatus([fallbackDomain]); // Pass as array for consistency
+      totalToolCalls++;
+      suggestions.push(
+        ...(data.status || []).map((s) => ({
+          domain: s.domain
+            ? s.domain.split(".")[0]
+            : fallbackDomain.split(".")[0],
+          tld: s.domain?.includes(".")
+            ? "." + s.domain.split(".").pop()
+            : ".com",
+          reason: `Creative fallback for ${s.domain} (inspired by ${keywords})`,
           available:
             s.status?.includes("inactive") || s.status?.includes("undelegated"),
-        };
-      });
-
-      return {
-        message: {
-          role: "assistant",
-          content: JSON.stringify({ suggestions }, null, 2),
-        },
-        toolCalls: [toolCall],
-        toolResults: [data],
-      };
+        }))
+      );
+      toolResults.push(data);
+      console.log(`Fallback call ${suggestions.length}: ${fallbackDomain}`);
+    } catch (error) {
+      console.error("Fallback error:", error);
     }
   }
 
+  // Trim to exactly 5
+  const finalSuggestions = suggestions.slice(0, 5);
+
+  const finalContent = JSON.stringify(
+    { suggestions: finalSuggestions },
+    null,
+    2
+  );
+
   return {
-    message: {
-      role: "assistant",
-      content: JSON.stringify({ suggestions: [] }, null, 2),
-    },
-    toolCalls: [],
-    toolResults: [],
+    message: { role: "assistant", content: finalContent },
+    toolCalls: assistantMessage.tool_calls || [],
+    toolResults,
   };
 }
 
@@ -208,7 +314,7 @@ app.post("/domains", async (req, res) => {
     console.log("im here");
     const result = await processToolCalls(
       requestData.messages,
-      [searchDomainToolSchema],
+      [getDomainStatusToolSchema],
       requestData.model
     );
     console.log("im here 2");
