@@ -145,159 +145,95 @@ async function getDomainStatus(domains) {
 
 async function processToolCalls(messages, tools, model) {
   console.log("Calling Ollama...");
-  console.log("message", messages);
-  console.log("tools", tools);
+  const conversation = [...messages];
 
-  // Start with a copy of messages to avoid mutating original
-  let conversation = [...messages];
-  const maxToolCalls = 5; // Max API calls to respect rate limit
-  let totalToolCalls = 0;
-  const suggestions = [];
-  const toolResults = [];
-
-  // Helper to extract keywords from user message for better fallbacks
   const userMessage =
     conversation.find((msg) => msg.role === "user")?.content || "";
-
-  console.log("USER MESSAGE", userMessage);
   const match = userMessage.match(
     /(?:words|keywords|based off these words)\s*([^.]*)/i
   );
   const keywords = match?.[1]?.trim().replace(/[^\w\s]/g, "") || "fallback";
-  const getFallbackDomain = (index) => {
-    const parts = keywords.split(/\s+/).slice(0, 2).join("-").toLowerCase();
-    return `${parts}${index}.com`;
-  };
 
-  // Single-turn processing (since we expect one getDomainStatus call with multiple domains)
-  const response = await ollama.chat({
+  const vibeMatch = userMessage.match(/vibe\s*(.*)/i);
+  const vibe = vibeMatch?.[1]?.trim() || "Any";
+
+  const initialResponse = await ollama.chat({
     model,
     messages: conversation,
     tools,
     stream: false,
     options: { max_tokens: 2000 },
   });
-  console.log("Ollama finished");
-  console.log("Ollama response:", util.inspect(response, false, null, true));
-  console.log(
-    "Number of tool calls received:",
-    response.message?.tool_calls?.length || 0
-  );
-  console.log("Model thinking:", response.message?.thinking || "None");
 
-  const assistantMessage = response.message;
+  const assistantMessage = initialResponse.message;
   conversation.push(assistantMessage);
 
-  if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+  let domainsToCheck = [];
+  if (assistantMessage.tool_calls?.length) {
     for (const toolCall of assistantMessage.tool_calls) {
       if (toolCall.function.name === "getDomainStatus") {
-        const domains = toolCall.function.arguments.domains || [];
-        if (domains.length === 0) {
-          console.log("No domains provided in tool call, skipping.");
-          continue;
-        }
-
-        try {
-          const data = await getDomainStatus(domains);
-          totalToolCalls += Math.min(
-            domains.length,
-            maxToolCalls - totalToolCalls
-          );
-
-          // Append tool result to conversation
-          conversation.push({
-            role: "tool",
-            content: JSON.stringify(data),
-            tool_call_id: toolCall.id || `call_${totalToolCalls}`,
-          });
-
-          // Add to suggestions
-          suggestions.push(
-            ...(data.status || []).map((s) => ({
-              domain: s.domain
-                ? s.domain.split(".")[0]
-                : domains[0].split(".")[0],
-              tld: s.domain?.includes(".")
-                ? "." + s.domain.split(".").pop()
-                : ".com",
-              reason: `Status check for ${s.domain} (based on keywords: ${keywords})`,
-              available:
-                s.status?.includes("inactive") ||
-                s.status?.includes("undelegated"),
-            }))
-          );
-
-          toolResults.push(data);
-          console.log(`Processed tool call for domains: ${domains.join(", ")}`);
-        } catch (error) {
-          console.error("Error in getDomainStatus tool call:", error);
-          conversation.push({
-            role: "tool",
-            content: JSON.stringify({ error: error.message }),
-            tool_call_id: toolCall.id || `call_${totalToolCalls}`,
-          });
-        }
-      } else if (toolCall.function.name === "searchDomains") {
-        const query = toolCall.function.arguments.query;
-        try {
-          const data = await searchDomains(query);
-          conversation.push({
-            role: "tool",
-            content: JSON.stringify(data),
-            tool_call_id: toolCall.id || `call_${totalToolCalls}`,
-          });
-          toolResults.push({ type: "search", data });
-        } catch (error) {
-          console.error("Error in searchDomains tool call:", error);
-          conversation.push({
-            role: "tool",
-            content: JSON.stringify({ error: error.message }),
-            tool_call_id: toolCall.id || `call_${totalToolCalls}`,
-          });
-        }
+        domainsToCheck = toolCall.function.arguments.domains || [];
       }
     }
   }
-  console.log("SUGGESTIONS", suggestions);
-  // Fallback: Fill to exactly 5 with keyword-based domains if needed
-  while (suggestions.length < 5 && totalToolCalls < maxToolCalls) {
-    const fallbackDomain = getFallbackDomain(suggestions.length + 1);
-    try {
-      const data = await getDomainStatus([fallbackDomain]); // Pass as array for consistency
-      totalToolCalls++;
-      suggestions.push(
-        ...(data.status || []).map((s) => ({
-          domain: s.domain
-            ? s.domain.split(".")[0]
-            : fallbackDomain.split(".")[0],
-          tld: s.domain?.includes(".")
-            ? "." + s.domain.split(".").pop()
-            : ".com",
-          reason: `Creative fallback for ${s.domain} (inspired by ${keywords})`,
-          available:
-            s.status?.includes("inactive") || s.status?.includes("undelegated"),
-        }))
-      );
-      toolResults.push(data);
-      console.log(`Fallback call ${suggestions.length}: ${fallbackDomain}`);
-    } catch (error) {
-      console.error("Fallback error:", error);
-    }
+
+  if (!domainsToCheck.length) {
+    domainsToCheck = keywords
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((k, i) => `${k.toLowerCase()}${i + 1}.com`);
   }
 
-  // Trim to exactly 5
-  const finalSuggestions = suggestions.slice(0, 5);
+  const statusData = await getDomainStatus(domainsToCheck);
+  const baseSuggestions = (statusData.status || []).map((s, i) => ({
+    domain: s.domain ? s.domain.split(".")[0] : domainsToCheck[i].split(".")[0],
+    tld: s.domain?.includes(".") ? "." + s.domain.split(".").pop() : ".com",
+    available:
+      s.status?.includes("inactive") || s.status?.includes("undelegated"),
+  }));
 
-  const finalContent = JSON.stringify(
-    { suggestions: finalSuggestions },
-    null,
-    2
-  );
+  const reasoningPrompt = `
+Here are some domain availability results: ${JSON.stringify(baseSuggestions)}.
+Please provide a JSON object with the same domains and tlds, but include a short creative "reason" for each one explaining why it fits the keywords "${keywords}" and vibe "${vibe}".
+Return only valid JSON in this format:
+{
+  "suggestions": [
+    { "domain": "...", "tld": "...", "available": true, "reason": "..." }
+  ]
+}
+  `;
+
+  const reasoningResponse = await ollama.chat({
+    model,
+    messages: [...conversation, { role: "user", content: reasoningPrompt }],
+    stream: false,
+  });
+
+  let finalSuggestions = [];
+  try {
+    const parsed = JSON.parse(reasoningResponse.message.content);
+    finalSuggestions =
+      parsed.suggestions ||
+      baseSuggestions.map((s) => ({
+        ...s,
+        reason: `Generated for vibe: ${vibe}, using keywords: ${keywords}`,
+      }));
+  } catch (err) {
+    console.error("Error parsing Ollama reasoning response", err);
+    // fallback: attach generic reason
+    finalSuggestions = baseSuggestions.map((s) => ({
+      ...s,
+      reason: `Generated for vibe: ${vibe}, using keywords: ${keywords}`,
+    }));
+  }
 
   return {
-    message: { role: "assistant", content: finalContent },
+    message: {
+      role: "assistant",
+      content: JSON.stringify({ suggestions: finalSuggestions }, null, 2),
+    },
     toolCalls: assistantMessage.tool_calls || [],
-    toolResults,
+    toolResults: [statusData],
   };
 }
 

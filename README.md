@@ -1,33 +1,35 @@
-# Quizzardry
+# Domain Name Generator
 
-An interactive front-end application that generates study materials (flashcards, multiple-choice, and true/false questions) using an LLM hosted on **Ollama**.  
-The project uses a **React** front end, an **Express** back end, and integrates with Ollama through a custom API.
+An interactive front-end application that generates **domain name suggestions** using an LLM hosted on **Ollama**.  
+The project uses a **React** front end, an **Express** back end, custom tools, the **Domainr API** for availability checks, and integrates with Ollama through a custom API.
 
 ---
 
 ## Features
 
-- Generate flashcards, multiple-choice, or true/false exam questions.
-- Select subject, focus area,academic level, and number of questions.
-- Interactive UI with answer selection and correctness feedback.
+- Generate **creative domain name ideas** based on:
+  - Keywords
+  - Desired TLDs (`.com`, `.net`, `.org`, `.app`, etc.)
+  - Style/Vibe (Fun, Abstract, Business, Any)
+- Interactive UI for inputting preferences.
+- Real-time feedback with domain availability (via Domainr API).
 - Back-end API powered by **Express**.
 - LLM communication via **Ollama** (using `gpt-oss:120b`).
+- Uses **tools** to ensure output is valid JSON, properly structured, and consistently formatted.
 
 ---
 
 ## UI
 
-![App Screenshot](Card.png)
-![App Screenshot](MultipleChoice.png)
-![App Screenshot](TF.png)
+![App Screenshot](Design.png)
 
 ---
 
 ## Demo
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=mh8hKno4xVM">
-    <img src="Card.png" alt="App Screenshot" width="400"/>
+  <a href="https://www.youtube.com/watch?v=t0dYuo4V0DQ">
+    <img src="Design.png" alt="App Screenshot" width="400"/>
   </a>
   <br>
   Click to watch the demo
@@ -39,6 +41,7 @@ The project uses a **React** front end, an **Express** back end, and integrates 
 
 - **Frontend**: React (Next.js optional), Tailwind CSS
 - **Backend**: Node.js, Express
+- **Domainr API**: For checking domain name availability
 - **LLM**: Ollama (`gpt-oss:120b`)
 - **Networking**: Tailscale for secure host connection
 
@@ -46,18 +49,27 @@ The project uses a **React** front end, an **Express** back end, and integrates 
 
 ## API Endpoints
 
-| Method | Path    | Description                         | Request Body                                                                                                             |
-| ------ | ------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| POST   | `/quiz` | Generate exam questions with Ollama | `{ model: "gpt-oss:120b", messages: [ {role: "system", content: "..."}, {role:"user", content:"..."} ], stream: false }` |
+| Method | Path       | Description                      | Request Body                                                                                                       |
+| ------ | ---------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| POST   | `/domains` | Generate domain name suggestions | `{ model: "gpt-oss:120b", messages: [{role:"system",content:"..."}, {role:"user",content:"..."}], stream: false }` |
 
 **Response Example:**
 
 ```json
 {
-  "model": "gpt-oss:120b",
-  "message": {
-    "role": "assistant",
-    "content": "[{ \"question\": \"...\", \"answer\": \"...\" }]"
-  }
+  "suggestions": [
+    {
+      "domain": "roamly",
+      "tld": ".com",
+      "reason": "Short, playful, and tied to travel/adventure",
+      "available": true
+    },
+    {
+      "domain": "ventureverse",
+      "tld": ".net",
+      "reason": "Abstract and modern name for adventurous experiences",
+      "available": false
+    }
+  ]
 }
 ```
