@@ -1,121 +1,48 @@
 const express = require("express");
 const cors = require("cors");
-const { Ollama } = require("ollama");
-const util = require("util");
-const path = require("path");
+const { ChatOllama } = require("@langchain/ollama");
+const { HumanMessage } = require("@langchain/core/messages");
+const { StateGraph, START, END } = require("@langchain/langgraph");
+const { StructuredTool } = require("@langchain/core/tools");
+const { z } = require("zod");
 const dotenv = require("dotenv");
+const path = require("path");
 
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const API_KEY = process.env.API_KEY;
 const BASE_URL = "https://domainr.p.rapidapi.com/v2";
-console.log(API_KEY);
 
 const app = express();
+const port = 4000;
 
 app.use(express.json());
+app.use(cors());
 
-const corsOptions = {
-  origin: ["http://localhost:3000", "http://localhost:5000"],
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true,
-};
-
-app.use((req, res, next) => {
-  console.log("Before CORS Middleware");
-  next();
+// Ollama model
+const llm = new ChatOllama({
+  baseUrl: "http://100.64.0.1:11434", // or localhost if that works
+  model: "gpt-oss:120b",
 });
 
-app.use(cors(corsOptions));
+// ------------------- TOOLS -------------------
 
-app.options("*", cors(corsOptions));
+class SearchDomainsTool extends StructuredTool {
+  name = "searchDomains";
+  description =
+    "Returns domain name suggestions and variations based on a given query.";
 
-const ollama = new Ollama({ host: "http://100.64.0.1:11434" });
-//const ollama = new Ollama({ host: "http://localhost:11434" });
+  schema = z.object({
+    query: z
+      .string()
+      .describe(
+        "The keyword or phrase to search domains for (e.g. 'acme cafe')."
+      ),
+  });
 
-const searchDomainToolSchema = {
-  type: "function",
-  function: {
-    name: "searchDomains",
-    description:
-      "Returns domain name suggestions and variations based on a given query.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description:
-            "The search term or keyword for domain suggestions (e.g., 'acme cafe').",
-        },
-      },
-      required: ["query"],
-    },
-  },
-};
-const getDomainStatusToolSchema = {
-  type: "function",
-  function: {
-    name: "getDomainStatus",
-    description:
-      "Checks and returns the availability and status of a list of domain names (up to 5). A status 'inactive' or 'undelegated' means available for registration; 'active' means unavailable. Rate limited to 5 checks.",
-    parameters: {
-      type: "object",
-      properties: {
-        domains: {
-          type: "array",
-          items: {
-            type: "string",
-            description:
-              "A fully qualified domain name to check (e.g., 'acmecoffee.shop').",
-          },
-          description:
-            "List of up to 5 domain names to check availability for.",
-          maxItems: 5,
-        },
-      },
-      required: ["domains"],
-    },
-  },
-};
-async function searchDomains(query) {
-  console.log("HELLO");
-  try {
-    console.log("AQUI1");
-    const url = `https://domainr.p.rapidapi.com/v2/search?query=${encodeURIComponent(
-      query
-    )}`;
-
-    const response = await fetch(url, {
-      headers: {
-        "X-RapidAPI-Key": API_KEY,
-        "X-RapidAPI-Host": "domainr.p.rapidapi.com",
-      },
-    });
-
-    console.log("searching");
-
-    if (!response.ok) {
-      throw new Error(
-        `Error fetching search results: ${response.status} ${response.statusText}`
-      );
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Error in searchDomains:", error.message);
-    throw error; // re-throw so calling function can handle it
-  }
-}
-
-async function getDomainStatus(domains) {
-  const maxDomains = 5;
-  const results = [];
-
-  for (const domain of domains.slice(0, maxDomains)) {
+  async _call({ query }) {
     try {
-      const url = `${BASE_URL}/status?domain=${encodeURIComponent(domain)}`;
+      const url = `${BASE_URL}/search?query=${encodeURIComponent(query)}`;
       const response = await fetch(url, {
         headers: {
           "X-RapidAPI-Key": API_KEY,
@@ -123,156 +50,140 @@ async function getDomainStatus(domains) {
         },
       });
 
-      console.log("statusing", domain);
       if (!response.ok) {
-        console.error(
-          `Error fetching status for ${domain}: ${response.statusText}`
-        );
-        results.push({ domain, status: "error", error: response.statusText });
-        continue;
+        throw new Error(`Domainr API search error: ${response.statusText}`);
       }
 
-      const data = await response.json().catch(() => ({}));
-      results.push(...(data.status || [{ domain, status: "error" }]));
-    } catch (error) {
-      console.error(`Error in API call for ${domain}:`, error.message);
-      results.push({ domain, status: "error", error: error.message });
+      const data = await response.json();
+      return data;
+    } catch (err) {
+      console.error("Error in searchDomains:", err.message);
+      return { error: err.message };
     }
   }
-
-  return { status: results };
 }
 
-async function processToolCalls(messages, tools, model) {
-  console.log("Calling Ollama...");
-  const conversation = [...messages];
+class GetDomainStatusTool extends StructuredTool {
+  name = "getDomainStatus";
+  description =
+    "Checks availability of up to 5 domains. Status 'inactive' or 'undelegated' = available.";
 
-  const userMessage =
-    conversation.find((msg) => msg.role === "user")?.content || "";
-  const match = userMessage.match(
-    /(?:words|keywords|based off these words)\s*([^.]*)/i
-  );
-  const keywords = match?.[1]?.trim().replace(/[^\w\s]/g, "") || "fallback";
-
-  const vibeMatch = userMessage.match(/vibe\s*(.*)/i);
-  const vibe = vibeMatch?.[1]?.trim() || "Any";
-
-  const initialResponse = await ollama.chat({
-    model,
-    messages: conversation,
-    tools,
-    stream: false,
-    options: { max_tokens: 2000 },
+  schema = z.object({
+    domains: z
+      .array(z.string())
+      .max(5)
+      .describe(
+        "List of up to 5 fully qualified domain names (e.g. acme.com)."
+      ),
   });
 
-  const assistantMessage = initialResponse.message;
-  conversation.push(assistantMessage);
+  async _call({ domains }) {
+    const results = [];
+    for (const domain of domains) {
+      try {
+        const url = `${BASE_URL}/status?domain=${encodeURIComponent(domain)}`;
+        const response = await fetch(url, {
+          headers: {
+            "X-RapidAPI-Key": API_KEY,
+            "X-RapidAPI-Host": "domainr.p.rapidapi.com",
+          },
+        });
 
-  let domainsToCheck = [];
-  if (assistantMessage.tool_calls?.length) {
-    for (const toolCall of assistantMessage.tool_calls) {
-      if (toolCall.function.name === "getDomainStatus") {
-        domainsToCheck = toolCall.function.arguments.domains || [];
+        if (!response.ok) {
+          results.push({ domain, status: "error" });
+          continue;
+        }
+        const data = await response.json();
+        results.push(...(data.status || [{ domain, status: "error" }]));
+      } catch (err) {
+        results.push({ domain, status: "error", error: err.message });
       }
     }
+    return { status: results };
   }
-
-  if (!domainsToCheck.length) {
-    domainsToCheck = keywords
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((k, i) => `${k.toLowerCase()}${i + 1}.com`);
-  }
-
-  const statusData = await getDomainStatus(domainsToCheck);
-  const baseSuggestions = (statusData.status || []).map((s, i) => ({
-    domain: s.domain ? s.domain.split(".")[0] : domainsToCheck[i].split(".")[0],
-    tld: s.domain?.includes(".") ? "." + s.domain.split(".").pop() : ".com",
-    available:
-      s.status?.includes("inactive") || s.status?.includes("undelegated"),
-  }));
-
-  const reasoningPrompt = `
-Here are some domain availability results: ${JSON.stringify(baseSuggestions)}.
-Please provide a JSON object with the same domains and tlds, but include a short creative "reason" for each one explaining why it fits the keywords "${keywords}" and vibe "${vibe}".
-Return only valid JSON in this format:
-{
-  "suggestions": [
-    { "domain": "...", "tld": "...", "available": true, "reason": "..." }
-  ]
 }
-  `;
 
-  const reasoningResponse = await ollama.chat({
-    model,
-    messages: [...conversation, { role: "user", content: reasoningPrompt }],
-    stream: false,
+const searchTool = new SearchDomainsTool();
+const statusTool = new GetDomainStatusTool();
+
+// ------------------- LANGGRAPH -------------------
+
+const graphStateData = {
+  query: "",
+  result: "",
+};
+
+async function domainNode(state) {
+  // 1. Ask the LLM what to do with the query
+  const message = new HumanMessage({
+    content: `The user wants domain ideas for: ${state.query}. 
+Use your tools to search and check availability.`,
   });
 
-  let finalSuggestions = [];
-  try {
-    const parsed = JSON.parse(reasoningResponse.message.content);
-    finalSuggestions =
-      parsed.suggestions ||
-      baseSuggestions.map((s) => ({
-        ...s,
-        reason: `Generated for vibe: ${vibe}, using keywords: ${keywords}`,
-      }));
-  } catch (err) {
-    console.error("Error parsing Ollama reasoning response", err);
-    // fallback: attach generic reason
-    finalSuggestions = baseSuggestions.map((s) => ({
-      ...s,
-      reason: `Generated for vibe: ${vibe}, using keywords: ${keywords}`,
-    }));
+  const llmWithTools = llm.bind({ tools: [searchTool, statusTool] });
+  const response = await llmWithTools.invoke([message]);
+
+  console.log("RAW LLM RESPONSE:", response);
+
+  // 2. Handle tool calls if any
+  if (response.tool_calls?.length) {
+    const toolResults = [];
+    for (const call of response.tool_calls) {
+      if (call.name === "searchDomains") {
+        const r = await searchTool.invoke(call.args);
+        toolResults.push(r);
+      } else if (call.name === "getDomainStatus") {
+        const r = await statusTool.invoke(call.args);
+        toolResults.push(r);
+      }
+    }
+
+    // 3. Feed results back to the model
+    const toolMessage = new HumanMessage({
+      content: `Tool results: ${JSON.stringify(toolResults)}`,
+    });
+    const response2 = await llm.invoke([message, toolMessage]);
+
+    return { result: response2.content };
   }
 
-  return {
-    message: {
-      role: "assistant",
-      content: JSON.stringify({ suggestions: finalSuggestions }, null, 2),
-    },
-    toolCalls: assistantMessage.tool_calls || [],
-    toolResults: [statusData],
-  };
+  return { result: response.content };
 }
+
+const workflow = new StateGraph({ channels: graphStateData });
+workflow.addNode("domains", domainNode);
+workflow.addEdge(START, "domains");
+workflow.addEdge("domains", END);
+
+const graph = workflow.compile();
+
+// ------------------- EXPRESS ROUTE -------------------
 
 app.post("/domains", async (req, res) => {
   try {
-    const requestData = req.body;
+    let userMessage = "";
 
-    console.log("Reuest data:", requestData.messages);
+    if (Array.isArray(req.body.messages)) {
+      userMessage =
+        req.body.messages.find((m) => m.role === "user")?.content || "";
+    } else if (req.body.query) {
+      userMessage = req.body.query;
+    }
 
-    console.log("KEY", API_KEY);
+    if (!userMessage) {
+      return res.status(400).json({ error: "No user query provided" });
+    }
 
-    const tools = [searchDomainToolSchema, getDomainStatusToolSchema];
+    const result = await graph.invoke({ query: userMessage });
 
-    console.log("im here");
-    const result = await processToolCalls(
-      requestData.messages,
-      [getDomainStatusToolSchema],
-      requestData.model
-    );
-    console.log("im here 2");
-    console.log(result.message);
-
-    res.json({ message: { content: result.message.content } });
-  } catch (error) {
-    console.error("Error proxying to golem:", error);
-    res.status(500).json({ error: "Failed to fetch from golem" });
+    console.log("GRAPH RESULT:", result);
+    res.json(result);
+  } catch (err) {
+    console.error("Error in /domains:", err);
+    res.status(500).json({ error: "Failed to process domains" });
   }
 });
 
-// app.post("/domains", (req, res) => {
-//   res.json({
-//     message: {
-//       content:
-//         '{"suggestions":[{"domain":"test","tld":".com","reason":"demo","available":true}]}',
-//     },
-//   });
-// });
-
-const PORT = 4000;
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+app.listen(port, () => {
+  console.log(`Server running on http://localhost:${port}`);
 });
