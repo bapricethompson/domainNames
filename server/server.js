@@ -139,9 +139,16 @@ Use your tools to search and check availability.`,
     }
 
     const toolMessage = new HumanMessage({
-      content: `Tool results: ${JSON.stringify(toolResults)}`,
+      content: `Tool results: ${JSON.stringify(
+        toolResults
+      )}.Now return EXACTLY 5 suggestions in JSON only, in this format:
+{"suggestions":[{"domain":"...", "tld":".com", "reason":"...", "available":true},...]}`,
     });
+    console.log("Tool results:", toolResults);
+    console.dir(toolResults, { depth: null });
     const response2 = await llm.invoke([message, toolMessage]);
+
+    console.log("FINAL LLM RESPONSE:", response2);
 
     return { result: response2.content, query: state.query };
   }
