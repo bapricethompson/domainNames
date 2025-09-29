@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { ChatOllama } = require("@langchain/ollama");
-const { HumanMessage } = require("@langchain/core/messages");
+const { HumanMessage, ToolMessage } = require("@langchain/core/messages");
 const { StateGraph, START, END } = require("@langchain/langgraph");
 const { StructuredTool } = require("@langchain/core/tools");
 const { z } = require("zod");
@@ -19,9 +19,8 @@ const port = 4000;
 app.use(express.json());
 app.use(cors());
 
-// Ollama model
 const llm = new ChatOllama({
-  baseUrl: "http://100.64.0.1:11434", // or localhost if that works
+  baseUrl: "http://100.64.0.1:11434",
   model: "gpt-oss:120b",
 });
 
@@ -114,7 +113,6 @@ const graphStateData = {
 };
 
 async function domainNode(state) {
-  // 1. Ask the LLM what to do with the query
   const message = new HumanMessage({
     content: `The user wants domain ideas for: ${state.query}. 
 Use your tools to search and check availability.`,
@@ -125,29 +123,30 @@ Use your tools to search and check availability.`,
 
   console.log("RAW LLM RESPONSE:", response);
 
-  // 2. Handle tool calls if any
+  // run all tool calls
   if (response.tool_calls?.length) {
     const toolResults = [];
     for (const call of response.tool_calls) {
       if (call.name === "searchDomains") {
+        console.log("Search tool requested");
         const r = await searchTool.invoke(call.args);
-        toolResults.push(r);
+        toolResults.push({ tool: "searchDomains", result: r });
       } else if (call.name === "getDomainStatus") {
+        console.log("Get domain status tool requested");
         const r = await statusTool.invoke(call.args);
-        toolResults.push(r);
+        toolResults.push({ tool: "getDomainStatus", result: r });
       }
     }
 
-    // 3. Feed results back to the model
     const toolMessage = new HumanMessage({
       content: `Tool results: ${JSON.stringify(toolResults)}`,
     });
     const response2 = await llm.invoke([message, toolMessage]);
 
-    return { result: response2.content };
+    return { result: response2.content, query: state.query };
   }
 
-  return { result: response.content };
+  return { result: response.content, query: state.query };
 }
 
 const workflow = new StateGraph({ channels: graphStateData });
@@ -156,8 +155,6 @@ workflow.addEdge(START, "domains");
 workflow.addEdge("domains", END);
 
 const graph = workflow.compile();
-
-// ------------------- EXPRESS ROUTE -------------------
 
 app.post("/domains", async (req, res) => {
   try {
