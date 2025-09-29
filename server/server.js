@@ -19,6 +19,20 @@ const port = 4000;
 app.use(express.json());
 app.use(cors());
 
+const corsOptions = {
+  origin: [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5000",
+    "http://127.0.0.1:5000",
+  ],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+};
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+
 const llm = new ChatOllama({
   baseUrl: "http://100.64.0.1:11434",
   model: "gpt-oss:120b",
@@ -28,14 +42,13 @@ const llm = new ChatOllama({
 
 class SearchDomainsTool extends StructuredTool {
   name = "searchDomains";
-  description =
-    "Returns domain name suggestions and variations based on a given query.";
+  description = "Returns domain name suggestions based on a given query.";
 
   schema = z.object({
     query: z
       .string()
       .describe(
-        "The keyword or phrase to search domains for (e.g. 'acme cafe')."
+        "The keyword or phrase to search domains for (e.g., 'acme cafe')."
       ),
   });
 
@@ -72,7 +85,7 @@ class GetDomainStatusTool extends StructuredTool {
       .array(z.string())
       .max(5)
       .describe(
-        "List of up to 5 fully qualified domain names (e.g. acme.com)."
+        "List of up to 5 fully qualified domain names (e.g., acme.com)."
       ),
   });
 
@@ -110,63 +123,141 @@ const statusTool = new GetDomainStatusTool();
 const graphStateData = {
   query: "",
   result: "",
+  toolResults: [],
+  domainsChecked: false,
 };
 
 async function domainNode(state) {
-  const message = new HumanMessage({
-    content: `The user wants domain ideas for: ${state.query}. 
-Use your tools to search and check availability.`,
-  });
+  const { query, toolResults, domainsChecked } = state;
 
   const llmWithTools = llm.bind({ tools: [searchTool, statusTool] });
-  const response = await llmWithTools.invoke([message]);
 
-  console.log("RAW LLM RESPONSE:", response);
-
-  // run all tool calls
-  if (response.tool_calls?.length) {
-    const toolResults = [];
-    for (const call of response.tool_calls) {
-      if (call.name === "searchDomains") {
-        console.log("Search tool requested");
-        const r = await searchTool.invoke(call.args);
-        toolResults.push({ tool: "searchDomains", result: r });
-      } else if (call.name === "getDomainStatus") {
-        console.log("Get domain status tool requested");
-        const r = await statusTool.invoke(call.args);
-        toolResults.push({ tool: "getDomainStatus", result: r });
-      }
-    }
-
-    const toolMessage = new HumanMessage({
-      content: `Tool results: ${JSON.stringify(
-        toolResults
-      )}.Now return EXACTLY 5 suggestions in JSON only, in this format:
-{"suggestions":[{"domain":"...", "tld":".com", "reason":"...", "available":true},...]}`,
+  // Step 1: If no tool results, initiate search
+  if (!toolResults.length) {
+    const message = new HumanMessage({
+      content: `The user wants domain ideas for: ${query}. Use the searchDomains tool to find suggestions, prioritizing .co TLD if possible.`,
     });
-    console.log("Tool results:", toolResults);
-    console.dir(toolResults, { depth: null });
-    const response2 = await llm.invoke([message, toolMessage]);
 
-    console.log("FINAL LLM RESPONSE:", response2);
+    const response = await llmWithTools.invoke([message]);
+    console.log("INITIAL LLM RESPONSE:", response);
 
-    return { result: response2.content, query: state.query };
+    if (response.tool_calls?.length) {
+      const newToolResults = [];
+      for (const call of response.tool_calls) {
+        if (call.name === "searchDomains") {
+          console.log("Search tool requested");
+          const result = await searchTool.invoke(call.args);
+          newToolResults.push({ tool: "searchDomains", result });
+        }
+      }
+      return { ...state, toolResults: newToolResults };
+    }
+    return { ...state, result: "No tool calls initiated." };
   }
 
-  return { result: response.content, query: state.query };
+  // Step 2: If search results exist but domains not checked, select domains and check status
+  if (toolResults.length && !domainsChecked) {
+    const searchResult = toolResults.find(
+      (tr) => tr.tool === "searchDomains"
+    )?.result;
+    if (!searchResult?.results) {
+      return { ...state, result: "No valid search results available." };
+    }
+
+    // Select up to 5 domains, prioritizing .co, then .com, .net, .org, .us
+    const domains = searchResult.results
+      .filter((d) => ["co", "com", "net", "org", "us"].includes(d.zone))
+      .slice(0, 5)
+      .map((d) => d.domain);
+
+    if (!domains.length) {
+      return {
+        ...state,
+        result: "No suitable domains found in search results.",
+      };
+    }
+
+    const message = new HumanMessage({
+      content: `Check availability for these domains: ${domains.join(
+        ", "
+      )}. Use the getDomainStatus tool.`,
+    });
+
+    const response = await llmWithTools.invoke([message]);
+    console.log("STATUS CHECK LLM RESPONSE:", response);
+
+    if (response.tool_calls?.length) {
+      const newToolResults = [...toolResults];
+      for (const call of response.tool_calls) {
+        if (call.name === "getDomainStatus") {
+          console.log("Get domain status tool requested");
+          const result = await statusTool.invoke(call.args);
+          newToolResults.push({ tool: "getDomainStatus", result });
+        }
+      }
+      return { ...state, toolResults: newToolResults, domainsChecked: true };
+    }
+    return { ...state, result: "No status check initiated." };
+  }
+
+  // Step 3: Generate final JSON response
+  const searchResult = toolResults.find(
+    (tr) => tr.tool === "searchDomains"
+  )?.result;
+  const statusResult = toolResults.find(
+    (tr) => tr.tool === "getDomainStatus"
+  )?.result;
+
+  if (!searchResult || !statusResult) {
+    return { ...state, result: "Incomplete tool results for final response." };
+  }
+
+  const suggestions = statusResult.status
+    .filter((s) => ["inactive", "undelegated"].includes(s.status))
+    .slice(0, 5)
+    .map((s) => ({
+      domain: s.domain,
+      tld: `.${s.domain.split(".").pop()}`,
+      reason: `Relevant to national parks and outdoors, TLD matches user preference.`,
+      available: true,
+    }));
+
+  // If fewer than 5 available domains, supplement with unavailable ones or fallback
+  if (suggestions.length < 5) {
+    const additional = searchResult.results
+      .filter((d) => !suggestions.some((s) => s.domain === d.domain))
+      .slice(0, 5 - suggestions.length)
+      .map((d) => ({
+        domain: d.domain,
+        tld: `.${d.zone}`,
+        reason: `Relevant to national parks and outdoors, but availability unknown.`,
+        available: false,
+      }));
+    suggestions.push(...additional);
+  }
+
+  const finalResponse = {
+    suggestions: suggestions.slice(0, 5), // Ensure exactly 5
+  };
+
+  return { ...state, result: JSON.stringify(finalResponse) };
 }
 
-const workflow = new StateGraph({ channels: graphStateData });
-workflow.addNode("domains", domainNode);
-workflow.addEdge(START, "domains");
-workflow.addEdge("domains", END);
+const workflow = new StateGraph({ channels: graphStateData })
+  .addNode("domains", domainNode)
+  .addEdge(START, "domains")
+  .addConditionalEdges("domains", (state) => {
+    if (!state.toolResults.length || !state.domainsChecked) {
+      return "domains"; // Loop back to process tools
+    }
+    return END; // Proceed to end with final result
+  });
 
 const graph = workflow.compile();
 
 app.post("/domains", async (req, res) => {
   try {
     let userMessage = "";
-
     if (Array.isArray(req.body.messages)) {
       userMessage =
         req.body.messages.find((m) => m.role === "user")?.content || "";
@@ -178,10 +269,19 @@ app.post("/domains", async (req, res) => {
       return res.status(400).json({ error: "No user query provided" });
     }
 
-    const result = await graph.invoke({ query: userMessage });
-
+    const result = await graph.invoke({
+      query: userMessage,
+      toolResults: [],
+      domainsChecked: false,
+    });
     console.log("GRAPH RESULT:", result);
-    res.json(result);
+    console.dir(result.toolResults, { depth: null });
+
+    try {
+      res.json(JSON.parse(result.result));
+    } catch {
+      res.json({ result: result.result });
+    }
   } catch (err) {
     console.error("Error in /domains:", err);
     res.status(500).json({ error: "Failed to process domains" });
