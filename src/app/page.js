@@ -17,55 +17,61 @@ const DomainGenerator = () => {
     const content = `Help me with my business idea and domain names. Generate me some potential domain names based off these words ${keyWords}. I want the domain to be available with these tlds, ${tld} and this vibe ${vibe}`;
     //const content = "what is weather like in st george ut today";
 
-    const requestData = {
-      messages: [
-        {
-          role: "system",
-          content: `
-You are a business and domain name advisor. 
-Respond ONLY in valid JSON in this format: 
-{"suggestions":[{"domain":"...", "tld":".com", "reason":"...","available":true},...]}
+    //     const requestData = {
+    //       messages: [
+    //         {
+    //           role: "system",
+    //           content: `
+    // You are a business and domain name advisor.
+    // Respond ONLY in valid JSON in this format:
+    // {"suggestions":[{"domain":"...", "tld":".com", "reason":"...","available":true},...]}
 
-Rules:
-1. Provide EXACTLY 5 domain name suggestions.
-2. Each suggestion must be creative, easy to remember, and brandable.
-3. Use the keywords as inspiration but do NOT just mash them together.
-4. Use the vibe (e.g., Fun, Abstract, Business) only as a STYLE or TONE — never as a literal word in the domain. 
-   - "Fun" → playful, quirky names.
-   - "Abstract" → more conceptual, modern, or artistic names.
-   - "Business" → professional, trustworthy names.
-   - "Any" → free to mix styles.
-5. Each suggestion must include a "reason" that explains the style choice.
-7. Output only JSON, no extra commentary.`,
-        },
-        { role: "user", content },
-      ],
+    // Rules:
+    // 1. Provide EXACTLY 5 domain name suggestions.
+    // 2. Each suggestion must be creative, easy to remember, and brandable.
+    // 3. Use the keywords as inspiration but do NOT just mash them together.
+    // 4. Use the vibe (e.g., Fun, Abstract, Business) only as a STYLE or TONE — never as a literal word in the domain.
+    //    - "Fun" → playful, quirky names.
+    //    - "Abstract" → more conceptual, modern, or artistic names.
+    //    - "Business" → professional, trustworthy names.
+    //    - "Any" → free to mix styles.
+    // 5. Each suggestion must include a "reason" that explains the style choice.
+    // 7. Output only JSON, no extra commentary.`,
+    //         },
+    //         { role: "user", content },
+    //       ],
+    //       model: "gpt-oss:120b",
+    //       stream: false,
+    //     };
+
+    const requestData = {
+      messages: [{ role: "user", content }],
       model: "gpt-oss:120b",
       stream: false,
     };
 
     try {
-      console.log(keyWords);
       const response = await fetch("http://localhost:4000/domains", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestData),
-        credentials: "include",
       });
+
       if (!response.ok) throw new Error("Failed to generate");
 
       const data = await response.json();
-      let parsed;
-      try {
-        parsed =
-          typeof data.message.content === "string"
-            ? JSON.parse(data.message.content)
-            : data.message.content;
-        setItems(parsed.suggestions || []);
-        console.log(parsed.suggestions);
-      } catch (err) {
-        throw new Error("Model did not return valid JSON");
-      }
+      console.log("RAW:", data);
+
+      // const startIndex = data.result.indexOf("{");
+      // const jsonString = data.result.slice(startIndex);
+      // console.log(jsonString);
+      // const secondIndex = jsonString.indexOf("{");
+      // const jsonString2 = data.result.slice(secondIndex);
+      // console.log(jsonString2);
+      // const parsed = JSON.parse(jsonString);
+      // console.log("PARSED:", parsed);
+
+      setItems(data.suggestions);
     } catch (err) {
       setError(err.message || "An error occurred. Please try again.");
     } finally {

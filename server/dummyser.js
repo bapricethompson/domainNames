@@ -131,6 +131,9 @@ async function helloNode(state) {
       ],
     });
 
+    console.log("SENDING TO LLM:", message2);
+    console.log("SENDING TO LLM:", message);
+
     const response2 = await llm.invoke([message, message2]);
     return {
       result: response2.content,
