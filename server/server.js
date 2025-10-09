@@ -114,8 +114,107 @@ class GetDomainStatusTool extends StructuredTool {
   }
 }
 
+class DomainRankingTool extends StructuredTool {
+  name = "rankDomains";
+  description = "Ranks domains based on quality, length, and TLD popularity.";
+
+  schema = z.object({
+    domains: z
+      .array(z.string())
+      .min(1)
+      .describe("A list of domain names to rank."),
+  });
+
+  async _call({ domains }) {
+    try {
+      const tldWeights = {
+        ".com": 10,
+        ".net": 8,
+        ".org": 7,
+        ".io": 6,
+        ".co": 6,
+        ".ai": 5,
+      };
+
+      const scored = domains.map((domain) => {
+        const lengthScore = Math.max(0, 20 - domain.length); // shorter = better
+        const tld = domain.substring(domain.lastIndexOf("."));
+        const tldScore = tldWeights[tld] || 3;
+        const hasHyphen = domain.includes("-");
+        const hasNumber = /\d/.test(domain);
+        const penalty = (hasHyphen ? 3 : 0) + (hasNumber ? 2 : 0);
+
+        const score = lengthScore + tldScore - penalty;
+        return { domain, score };
+      });
+
+      // sort highest first
+      scored.sort((a, b) => b.score - a.score);
+
+      return {
+        ranked: scored,
+        top: scored[0],
+      };
+    } catch (err) {
+      console.error("Error in rankDomains:", err.message);
+      return { error: err.message };
+    }
+  }
+}
+
+class MakeDecisionTool extends StructuredTool {
+  name = "makeDecision";
+  description =
+    "Automatically chooses the next action: either to check domain rankings or check trademark classes.";
+
+  async _call() {
+    const options = ["rank", "trademark"];
+    const choice = options[Math.floor(Math.random() * options.length)];
+    console.log(`DecisionTool: Selected "${choice}"`);
+    return choice;
+  }
+}
+
+class CheckTrademarkTool extends StructuredTool {
+  name = "checkTrademarks";
+  description =
+    "Checks if any of the provided domain names may have potential trademark conflicts.";
+
+  schema = z.object({
+    domains: z
+      .array(z.string())
+      .min(1)
+      .describe("A list of domain names to check for trademark conflicts."),
+  });
+
+  async _call({ domains }) {
+    try {
+      // ⚠️ For now, simulate a check — you could later connect to a real trademark API.
+      const knownBrands = ["google", "facebook", "nike", "apple", "amazon"];
+
+      const results = domains.map((domain) => {
+        const base = domain.split(".")[0].toLowerCase();
+        const conflict = knownBrands.some((brand) => base.includes(brand));
+        return {
+          domain,
+          trademarkConflict: conflict,
+          status: conflict ? "⚠️ Potential Conflict" : "✅ Clear",
+        };
+      });
+
+      return { results };
+    } catch (err) {
+      console.error("Error in checkTrademarks:", err.message);
+      return { error: err.message };
+    }
+  }
+}
+
 const searchTool = new SearchDomainsTool();
 const statusTool = new GetDomainStatusTool();
+const rankingTool = new DomainRankingTool();
+const trademarkTool = new CheckTrademarkTool();
+const decisionTool = new MakeDecisionTool();
 
 // ------------------- LANGGRAPH -------------------
 
@@ -142,13 +241,9 @@ async function domainNode(state) {
   const llmWithTool = llm.bind({ tools: [searchTool, statusTool] });
   const response = await llmWithTool.invoke([message]);
 
-  console.log("RAW LLM RESPONSE:", response);
-
   const toolCall = response.tool_calls?.[0];
 
   if (toolCall) {
-    console.log("TOOL REQUESTED BY LLM:", toolCall);
-
     let toolResult;
     if (toolCall.name === "searchDomains") {
       toolResult = await searchTool.invoke(toolCall.args);
@@ -158,8 +253,6 @@ async function domainNode(state) {
       console.warn("Unknown tool requested:", toolCall.name);
       return { result: response.content };
     }
-
-    console.log("TOOL RESULT:", toolResult);
 
     let toolSummary = "";
 
@@ -188,7 +281,6 @@ async function domainNode(state) {
     });
 
     const response2 = await llm.invoke([message, followUpMessage]);
-    console.log("LLM RESPONSE:", response2);
 
     return {
       result: response2.content,
@@ -200,14 +292,88 @@ async function domainNode(state) {
   }
 }
 
+async function domainDecisionNode(state) {
+  console.log("DECISION NODE STATE:", state);
+  const message = new HumanMessage({
+    content: [
+      {
+        type: "text",
+        text: ` Next step for this query: ${state.query}. Choose between 'rank' or 'trademark'. Respond with only one word.`,
+      },
+    ],
+  });
+  const llmWithTool = llm.bind({ tools: [decisionTool] });
+  const response = await llmWithTool.invoke([message]);
+  console.log("DECISION NODE LLM RESPONSE:", response.content);
+
+  const toolCall = response.tool_calls?.[0];
+  return { result: response.content, toolCalls: [{ name: toolCall.name }] };
+}
+
+async function domainRankingNode(state) {
+  console.log("DOMAIN NODE STATE:", state);
+
+  const message = new HumanMessage({
+    content: [
+      {
+        type: "text",
+        text: ` ${state.query} Respond only with valid JSON in this format say'SUGGESTIONS:' before returning this: "suggestions":["domain":"...", "tld":".com", "reason":"...","available":true},...]}`,
+      },
+    ],
+  });
+  const llmWithTool = llm.bind({ tools: [rankingTool] });
+  const response = await llmWithTool.invoke([message]);
+  console.log("ranking node:", response.content);
+  return {
+    result: response.content,
+  };
+}
+
+async function domainTrademarkNode(state) {
+  console.log("DOMAIN NODE STATE:", state);
+
+  const message = new HumanMessage({
+    content: [
+      {
+        type: "text",
+        text: ` ${state.query} Respond only with valid JSON in this format say 'SUGGESTIONS:' before returning this: "suggestions":["domain":"...", "tld":".com", "reason":"...","available":true},...]}`,
+      },
+    ],
+  });
+  const llmWithTool = llm.bind({ tools: [trademarkTool] });
+  const response = await llmWithTool.invoke([message]);
+  console.log("trademark node:", response.content);
+  return {
+    result: response.content,
+  };
+}
+
+function routingFunction(state) {
+  console.log("ROUTING FUNCTION STATE:", state);
+
+  if (state.decision === "rank") return "rank";
+  if (state.decision === "trademark") return "trademark";
+
+  return "rank";
+}
+
 const workflow = new StateGraph({ channels: graphStateData });
 
 // step 2: define nodes
 workflow.addNode("domains", domainNode);
+workflow.addNode("decision", domainDecisionNode);
+workflow.addNode("rank", domainRankingNode);
+workflow.addNode("trademark", domainTrademarkNode);
 
 // step 3: define edges
 workflow.addEdge(START, "domains");
-workflow.addEdge("domains", END);
+workflow.addEdge("domains", "decision");
+workflow.addConditionalEdges("decision", routingFunction, [
+  "rank",
+  "trademark",
+]);
+workflow.addEdge("rank", END);
+workflow.addEdge("trademark", END);
 const graph = workflow.compile();
 
 app.post("/domains", async (req, res) => {
