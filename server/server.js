@@ -127,6 +127,7 @@ class DomainRankingTool extends StructuredTool {
 
   async _call({ domains }) {
     try {
+      console.log("Ranking domains:", domains);
       const tldWeights = {
         ".com": 10,
         ".net": 8,
@@ -168,6 +169,7 @@ class MakeDecisionTool extends StructuredTool {
     "Automatically chooses the next action: either to check domain rankings or check trademark classes.";
 
   async _call() {
+    console.log("DecisionTool: Making a decision...");
     const options = ["rank", "trademark"];
     const choice = options[Math.floor(Math.random() * options.length)];
     console.log(`DecisionTool: Selected "${choice}"`);
@@ -302,16 +304,21 @@ async function domainDecisionNode(state) {
       },
     ],
   });
+  console.log("im here");
   const llmWithTool = llm.bind({ tools: [decisionTool] });
   const response = await llmWithTool.invoke([message]);
   console.log("DECISION NODE LLM RESPONSE:", response.content);
 
-  const toolCall = response.tool_calls?.[0];
-  return { result: response.content, toolCalls: [{ name: toolCall.name }] };
+  const decision = response.content.match(/rank|trademark/i)?.[0] || "rank";
+
+  state.decision = decision;
+  return {
+    ...state,
+  };
 }
 
 async function domainRankingNode(state) {
-  console.log("DOMAIN NODE STATE:", state);
+  console.log("ranking STATE:", state);
 
   const message = new HumanMessage({
     content: [
@@ -330,7 +337,7 @@ async function domainRankingNode(state) {
 }
 
 async function domainTrademarkNode(state) {
-  console.log("DOMAIN NODE STATE:", state);
+  console.log("trademark NODE STATE:", state);
 
   const message = new HumanMessage({
     content: [
@@ -353,7 +360,6 @@ function routingFunction(state) {
 
   if (state.decision === "rank") return "rank";
   if (state.decision === "trademark") return "trademark";
-
   return "rank";
 }
 
@@ -445,7 +451,6 @@ app.post("/domains", async (req, res) => {
 
     console.log("Extracted suggestions:", suggestionsJson);
 
-    // Now use suggestionsJson in your response
     try {
       if (suggestionsJson) {
         res.json(suggestionsJson);
