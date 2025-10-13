@@ -34,7 +34,7 @@ app.options("*", cors(corsOptions));
 
 const llm = new ChatOllama({
   baseUrl: "http://100.64.0.1:11434",
-  model: "gpt-oss:120b",
+  model: "gpt-oss:20b",
 });
 
 // ------------------- TOOLS -------------------
@@ -321,6 +321,7 @@ async function domainRankingNode(state) {
   console.log("RANKING NODE STATE:", state);
 
   const suggestionsMarker = "SUGGESTIONS:";
+  console.log(state.result);
   const sourceText = state.result?.result || "";
   let suggestionsJson = null;
 
