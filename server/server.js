@@ -321,8 +321,10 @@ async function domainRankingNode(state) {
   console.log("RANKING NODE STATE:", state);
 
   const suggestionsMarker = "SUGGESTIONS:";
-  console.log(state.result);
-  const sourceText = state.result?.result || "";
+  const sourceText =
+    typeof state.result === "string"
+      ? state.result
+      : JSON.stringify(state.result || "");
   let suggestionsJson = null;
 
   const idx = sourceText.lastIndexOf(suggestionsMarker);
@@ -344,13 +346,22 @@ async function domainRankingNode(state) {
       }
 
       if (endPos !== -1) {
-        const jsonString = afterMarker.slice(firstBrace, endPos);
+        let jsonString = afterMarker.slice(firstBrace, endPos).trim();
+
+        // 🧹 Sanitize: remove trailing periods or commas after closing brace
+        jsonString = jsonString.replace(/}\s*[\.,]*\s*$/, "}");
+
         try {
           suggestionsJson = JSON.parse(jsonString);
           console.log("✅ Successfully parsed JSON from SUGGESTIONS");
         } catch (err) {
           console.error("❌ Failed to parse JSON:", err);
+          console.log("RAW STRING THAT FAILED:", jsonString);
         }
+      } else {
+        console.warn(
+          "⚠️ Could not find matching closing brace for SUGGESTIONS JSON"
+        );
       }
     }
   } else {
@@ -370,7 +381,6 @@ async function domainRankingNode(state) {
 
   const domainsToRank =
     parsedDomains.length > 0 ? parsedDomains : exampleDomains;
-
   console.log("Domains to rank:", domainsToRank);
 
   try {
