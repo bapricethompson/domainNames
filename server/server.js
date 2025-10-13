@@ -318,22 +318,76 @@ async function domainDecisionNode(state) {
 }
 
 async function domainRankingNode(state) {
-  console.log("ranking STATE:", state);
+  console.log("RANKING NODE STATE:", state);
 
-  const message = new HumanMessage({
-    content: [
-      {
-        type: "text",
-        text: ` ${state.query} Respond only with valid JSON in this format say'SUGGESTIONS:' before returning this: "suggestions":["domain":"...", "tld":".com", "reason":"...","available":true},...]}`,
-      },
-    ],
-  });
-  const llmWithTool = llm.bind({ tools: [rankingTool] });
-  const response = await llmWithTool.invoke([message]);
-  console.log("ranking node:", response.content);
-  return {
-    result: response.content,
-  };
+  const suggestionsMarker = "SUGGESTIONS:";
+  const sourceText = state.result?.result || "";
+  let suggestionsJson = null;
+
+  const idx = sourceText.lastIndexOf(suggestionsMarker);
+  if (idx !== -1) {
+    let afterMarker = sourceText.slice(idx + suggestionsMarker.length).trim();
+
+    const firstBrace = afterMarker.indexOf("{");
+    if (firstBrace !== -1) {
+      let braceCount = 0;
+      let endPos = -1;
+
+      for (let i = firstBrace; i < afterMarker.length; i++) {
+        if (afterMarker[i] === "{") braceCount++;
+        if (afterMarker[i] === "}") braceCount--;
+        if (braceCount === 0 && i > firstBrace) {
+          endPos = i + 1;
+          break;
+        }
+      }
+
+      if (endPos !== -1) {
+        const jsonString = afterMarker.slice(firstBrace, endPos);
+        try {
+          suggestionsJson = JSON.parse(jsonString);
+          console.log("✅ Successfully parsed JSON from SUGGESTIONS");
+        } catch (err) {
+          console.error("❌ Failed to parse JSON:", err);
+        }
+      }
+    }
+  } else {
+    console.warn("⚠️ No SUGGESTIONS marker found in text");
+  }
+
+  const parsedDomains =
+    suggestionsJson?.suggestions?.map((s) => s.domain).filter(Boolean) || [];
+
+  const exampleDomains = [
+    "wildparktrails.co",
+    "nationalparkco.co",
+    "parkventure.co",
+    "outdoorparks.co",
+    "naturetreks.co",
+  ];
+
+  const domainsToRank =
+    parsedDomains.length > 0 ? parsedDomains : exampleDomains;
+
+  console.log("Domains to rank:", domainsToRank);
+
+  try {
+    const result = await rankingTool.invoke({ domains: domainsToRank });
+    console.log("🏁 Ranking results:", result);
+
+    return {
+      ...state,
+      result,
+      rankedDomains: domainsToRank,
+    };
+  } catch (err) {
+    console.error("❌ Error in ranking node:", err);
+    return {
+      ...state,
+      result: { error: err.message },
+    };
+  }
 }
 
 async function domainTrademarkNode(state) {
