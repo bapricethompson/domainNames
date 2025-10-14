@@ -201,7 +201,14 @@ class CheckTrademarkTool extends StructuredTool {
   async _call({ domains }) {
     try {
       // ⚠️ For now, simulate a check — you could later connect to a real trademark API.
-      const knownBrands = ["google", "facebook", "nike", "apple", "amazon"];
+      const knownBrands = [
+        "google",
+        "facebook",
+        "nike",
+        "apple",
+        "amazon",
+        "disney",
+      ];
 
       const results = domains.map((domain) => {
         const base = domain.split(".")[0].toLowerCase();
@@ -209,7 +216,7 @@ class CheckTrademarkTool extends StructuredTool {
         return {
           domain,
           trademarkConflict: conflict,
-          status: conflict ? "⚠️ Potential Conflict" : "✅ Clear",
+          status: conflict ? "Potential Conflict" : "Clear",
         };
       });
 
@@ -309,14 +316,14 @@ async function domainDecisionNode(state) {
     content: [
       {
         type: "text",
-        text: ` Next step for this query: ${state.query}. Choose between 'rank' or 'trademark'. Respond with only one word.`,
+        text: `Use the tool "makeDecision" to choose the next step: either "rank" or "trademark".`,
       },
     ],
   });
   console.log("im here");
   const llmWithTool = llm.bind({ tools: [decisionTool] });
   const response = await llmWithTool.invoke([message]);
-  console.log("DECISION NODE LLM RESPONSE:", response.content);
+  console.log("DECISION NODE LLM RESPONSE:", response.tool_calls?.[0]);
 
   const decision = response.content.match(/rank|trademark/i)?.[0] || "rank";
 
@@ -397,22 +404,83 @@ async function domainRankingNode(state) {
 }
 
 async function domainTrademarkNode(state) {
-  console.log("trademark NODE STATE:", state);
+  console.log("🧩 TRADEMARK NODE STATE:", state);
 
-  const message = new HumanMessage({
-    content: [
-      {
-        type: "text",
-        text: ` ${state.query} Respond only with valid JSON in this format "suggestions":["domain":"...", "tld":".com", "reason":"...","available":true},...]}`,
+  let suggestionsJson = null;
+  try {
+    let raw =
+      typeof state.result === "string"
+        ? state.result.trim()
+        : JSON.stringify(state.result);
+
+    // 🧹 Clean AI artifacts before parsing
+    let cleaned = raw
+      .replace(/```json/i, "")
+      .replace(/```/g, "")
+      .replace(/(\.\.\.|…)/g, "")
+      .replace(/,(\s*[}\]])/g, "$1")
+      .replace(/[^\x20-\x7E\n\r\t]/g, "");
+
+    suggestionsJson = JSON.parse(cleaned);
+    console.log("✅ Successfully parsed JSON");
+  } catch (err) {
+    console.error("❌ Failed to parse JSON:", err);
+    console.log("RAW STRING THAT FAILED:", state.result);
+  }
+
+  // 🧩 Handle possible nesting: "SUGGESTIONS" → "suggestions"
+  const suggestions =
+    suggestionsJson?.SUGGESTIONS?.suggestions ||
+    suggestionsJson?.SUGGESTIONS ||
+    suggestionsJson?.suggestions ||
+    [];
+
+  const parsedDomains = suggestions.map((s) => s.domain).filter(Boolean);
+
+  const exampleDomains = ["wildparktrails.co"];
+  const domainsToTrademark =
+    parsedDomains.length > 0 ? parsedDomains : exampleDomains;
+
+  console.log("Domains to trademark:", domainsToTrademark);
+
+  try {
+    const result = await trademarkTool.invoke({ domains: domainsToTrademark });
+    console.log("🏁 Trademark tool results:", result);
+
+    // ✅ Extract the real list
+    const trademarkResults = result?.results || [];
+
+    // 🗺️ Create a lookup map
+    const trademarkedMap = new Map(
+      trademarkResults.map((r) => [r.domain, r.status])
+    );
+
+    // 🔗 Merge back into suggestions
+    const mergedSuggestions = suggestions.map((s) => ({
+      ...s,
+      trademarkStatus: trademarkedMap.get(s.domain) ?? "Unknown",
+    }));
+
+    // Optional sort — clear domains first
+    mergedSuggestions.sort((a, b) =>
+      a.trademarkStatus.includes("Clear") ? -1 : 1
+    );
+
+    return {
+      ...state,
+      result: {
+        trademarks: mergedSuggestions,
+        top: mergedSuggestions[0] || null,
       },
-    ],
-  });
-  const llmWithTool = llm.bind({ tools: [trademarkTool] });
-  const response = await llmWithTool.invoke([message]);
-  console.log("trademark node:", response.content);
-  return {
-    result: response.content,
-  };
+      checkedDomains: domainsToTrademark,
+    };
+  } catch (err) {
+    console.error("❌ Error in trademarking node:", err);
+    return {
+      ...state,
+      result: { error: err.message },
+    };
+  }
 }
 
 function routingFunction(state) {
@@ -421,7 +489,7 @@ function routingFunction(state) {
   if (state.decision === "rank") return "rank";
   if (state.decision === "trademark") return "trademark";
   console.log("No valid decision made, defaulting to 'rank'");
-  return "rank";
+  return "trademark";
 }
 
 const workflow = new StateGraph({ channels: graphStateData });
