@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { ChatOllama } = require("@langchain/ollama");
+const { ChatOpenAI } = require("@langchain/openai");
 const { HumanMessage, ToolMessage } = require("@langchain/core/messages");
 const { StateGraph, START, END } = require("@langchain/langgraph");
 const { StructuredTool } = require("@langchain/core/tools");
@@ -32,10 +33,18 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-const llm = new ChatOllama({
-  baseUrl: "http://100.64.0.1:11434",
+const llm = new ChatOpenAI({
+  apiKey: "",
+  configuration: {
+    baseURL: "http://100.64.0.1:11434/v1",
+  },
   model: "gpt-oss:20b",
 });
+
+// const llm = new ChatOllama({
+//   baseUrl: "http://100.64.0.1:11434",
+//   model: "gpt-oss:20b",
+// });
 
 // ------------------- TOOLS -------------------
 
@@ -166,7 +175,7 @@ class DomainRankingTool extends StructuredTool {
 class MakeDecisionTool extends StructuredTool {
   name = "makeDecision";
   description =
-    "Automatically chooses the next action: either to check domain rankings or check trademark classes.";
+    "Randomly chooses the next action: either to check domain rankings or check trademark classes.";
 
   async _call() {
     console.log("DecisionTool: Making a decision...");
@@ -234,7 +243,7 @@ async function domainNode(state) {
     content: [
       {
         type: "text",
-        text: ` ${state.query} Respond only with valid JSON in this format say'SUGGESTIONS:' before returning this: "suggestions":["domain":"...", "tld":".com", "reason":"...","available":true},...]}`,
+        text: ` ${state.query} Respond only with valid JSON in this format "suggestions":["domain":"...", "tld":".com", "reason":"...","available":true},...]}`,
       },
     ],
   });
@@ -320,76 +329,62 @@ async function domainDecisionNode(state) {
 async function domainRankingNode(state) {
   console.log("RANKING NODE STATE:", state);
 
-  const suggestionsMarker = "SUGGESTIONS:";
-  const sourceText =
-    typeof state.result === "string"
-      ? state.result
-      : JSON.stringify(state.result || "");
   let suggestionsJson = null;
+  try {
+    let raw =
+      typeof state.result === "string"
+        ? state.result.trim()
+        : JSON.stringify(state.result);
 
-  const idx = sourceText.lastIndexOf(suggestionsMarker);
-  if (idx !== -1) {
-    let afterMarker = sourceText.slice(idx + suggestionsMarker.length).trim();
+    // 🧹 Clean AI artifacts before parsing
+    let cleaned = raw
+      .replace(/```json/i, "") // remove ```json
+      .replace(/```/g, "") // remove closing ```
+      .replace(/(\.\.\.|…)/g, "") // remove ellipses
+      .replace(/,(\s*[}\]])/g, "$1") // remove trailing commas
+      .replace(/[^\x20-\x7E\n\r\t]/g, ""); // strip weird non-ascii
 
-    const firstBrace = afterMarker.indexOf("{");
-    if (firstBrace !== -1) {
-      let braceCount = 0;
-      let endPos = -1;
-
-      for (let i = firstBrace; i < afterMarker.length; i++) {
-        if (afterMarker[i] === "{") braceCount++;
-        if (afterMarker[i] === "}") braceCount--;
-        if (braceCount === 0 && i > firstBrace) {
-          endPos = i + 1;
-          break;
-        }
-      }
-
-      if (endPos !== -1) {
-        let jsonString = afterMarker.slice(firstBrace, endPos).trim();
-
-        // 🧹 Sanitize: remove trailing periods or commas after closing brace
-        jsonString = jsonString.replace(/}\s*[\.,]*\s*$/, "}");
-
-        try {
-          suggestionsJson = JSON.parse(jsonString);
-          console.log("✅ Successfully parsed JSON from SUGGESTIONS");
-        } catch (err) {
-          console.error("❌ Failed to parse JSON:", err);
-          console.log("RAW STRING THAT FAILED:", jsonString);
-        }
-      } else {
-        console.warn(
-          "⚠️ Could not find matching closing brace for SUGGESTIONS JSON"
-        );
-      }
-    }
-  } else {
-    console.warn("⚠️ No SUGGESTIONS marker found in text");
+    suggestionsJson = JSON.parse(cleaned);
+    console.log("✅ Successfully parsed JSON");
+  } catch (err) {
+    console.error("❌ Failed to parse JSON:", err);
+    console.log("RAW STRING THAT FAILED:", state.result);
   }
 
-  const parsedDomains =
-    suggestionsJson?.suggestions?.map((s) => s.domain).filter(Boolean) || [];
+  // 🧩 Handle possible nesting: "SUGGESTIONS" → "suggestions"
+  const suggestions =
+    suggestionsJson?.SUGGESTIONS?.suggestions ||
+    suggestionsJson?.SUGGESTIONS ||
+    suggestionsJson?.suggestions ||
+    [];
 
-  const exampleDomains = [
-    "wildparktrails.co",
-    "nationalparkco.co",
-    "parkventure.co",
-    "outdoorparks.co",
-    "naturetreks.co",
-  ];
+  const parsedDomains = suggestions.map((s) => s.domain).filter(Boolean);
 
+  const exampleDomains = ["wildparktrails.co"];
   const domainsToRank =
     parsedDomains.length > 0 ? parsedDomains : exampleDomains;
+
   console.log("Domains to rank:", domainsToRank);
 
   try {
     const result = await rankingTool.invoke({ domains: domainsToRank });
     console.log("🏁 Ranking results:", result);
 
+    // Merge ranking results back into suggestions
+    const rankedMap = new Map(result.ranked.map((r) => [r.domain, r.score]));
+    const mergedSuggestions = suggestions.map((s) => ({
+      ...s,
+      rank: rankedMap.get(s.domain) ?? null,
+    }));
+
+    mergedSuggestions.sort((a, b) => (b.rank || 0) - (a.rank || 0));
+
     return {
       ...state,
-      result,
+      result: {
+        ranked: mergedSuggestions,
+        top: mergedSuggestions[0] || null,
+      },
       rankedDomains: domainsToRank,
     };
   } catch (err) {
@@ -408,7 +403,7 @@ async function domainTrademarkNode(state) {
     content: [
       {
         type: "text",
-        text: ` ${state.query} Respond only with valid JSON in this format say 'SUGGESTIONS:' before returning this: "suggestions":["domain":"...", "tld":".com", "reason":"...","available":true},...]}`,
+        text: ` ${state.query} Respond only with valid JSON in this format "suggestions":["domain":"...", "tld":".com", "reason":"...","available":true},...]}`,
       },
     ],
   });
@@ -471,56 +466,11 @@ app.post("/domains", async (req, res) => {
 
     console.dir(result.toolResults, { depth: null });
 
-    // Find the *last* occurrence of SUGGESTIONS: (in case there are multiple)
-    const suggestionsMarker = "SUGGESTIONS:";
-    const idx = result.result.lastIndexOf(suggestionsMarker);
-
-    let suggestionsJson = null;
-    if (idx !== -1) {
-      // Extract everything after the last 'SUGGESTIONS:'
-      let afterMarker = result.result
-        .slice(idx + suggestionsMarker.length)
-        .trim();
-
-      // Find the first '{' and extract from there to end
-      const firstBrace = afterMarker.indexOf("{");
-      if (firstBrace !== -1) {
-        afterMarker = afterMarker.slice(firstBrace);
-
-        // Now find matching pairs of braces to extract complete JSON
-        let braceCount = 0;
-        let endPos = -1;
-
-        for (let i = 0; i < afterMarker.length; i++) {
-          if (afterMarker[i] === "{") braceCount++;
-          if (afterMarker[i] === "}") {
-            braceCount--;
-            if (braceCount === 0) {
-              endPos = i + 1;
-              break;
-            }
-          }
-        }
-
-        if (endPos !== -1) {
-          const jsonString = afterMarker.slice(0, endPos);
-          try {
-            suggestionsJson = JSON.parse(jsonString);
-            console.log("Successfully parsed suggestions JSON");
-          } catch (e) {
-            console.error("Failed to parse suggestions JSON:", e);
-          }
-        }
-      }
-    }
-
-    console.log("Extracted suggestions:", suggestionsJson);
-
     try {
-      if (suggestionsJson) {
-        res.json(suggestionsJson);
+      if (result) {
+        res.json(result);
       } else {
-        res.json({ result: result.result });
+        res.json({ result: result });
       }
     } catch (err) {
       console.error("Error sending response:", err);
