@@ -15,34 +15,6 @@ const DomainGenerator = () => {
     setItems([]);
 
     const content = `Help me with my business idea and domain names. Generate me some potential domain names based off these words ${keyWords}. I want the domain to be available with these tlds, ${tld} and this vibe ${vibe}`;
-    //const content = "what is weather like in st george ut today";
-
-    //     const requestData = {
-    //       messages: [
-    //         {
-    //           role: "system",
-    //           content: `
-    // You are a business and domain name advisor.
-    // Respond ONLY in valid JSON in this format:
-    // {"suggestions":[{"domain":"...", "tld":".com", "reason":"...","available":true},...]}
-
-    // Rules:
-    // 1. Provide EXACTLY 5 domain name suggestions.
-    // 2. Each suggestion must be creative, easy to remember, and brandable.
-    // 3. Use the keywords as inspiration but do NOT just mash them together.
-    // 4. Use the vibe (e.g., Fun, Abstract, Business) only as a STYLE or TONE — never as a literal word in the domain.
-    //    - "Fun" → playful, quirky names.
-    //    - "Abstract" → more conceptual, modern, or artistic names.
-    //    - "Business" → professional, trustworthy names.
-    //    - "Any" → free to mix styles.
-    // 5. Each suggestion must include a "reason" that explains the style choice.
-    // 7. Output only JSON, no extra commentary.`,
-    //         },
-    //         { role: "user", content },
-    //       ],
-    //       model: "gpt-oss:120b",
-    //       stream: false,
-    //     };
 
     const requestData = {
       messages: [{ role: "user", content }],
@@ -61,30 +33,34 @@ const DomainGenerator = () => {
 
       const data = await response.json();
       console.log("RAW:", data);
-
-      // const startIndex = data.result.indexOf("{");
-      // const jsonString = data.result.slice(startIndex);
-      // console.log(jsonString);
-      // const secondIndex = jsonString.indexOf("{");
-      // const jsonString2 = data.result.slice(secondIndex);
-      // console.log(jsonString2);
-      // const parsed = JSON.parse(jsonString);
-      // console.log("PARSED:", parsed);
-
-      setItems(data.suggestions);
+      setItems(data?.result?.ranked || []); // Access ranked array
     } catch (err) {
       setError(err.message || "An error occurred. Please try again.");
     } finally {
       setLoading(false);
     }
   };
+
+  // 🧠 Convert numeric rank → human label
+  const getRankLabel = (rank) => {
+    if (rank >= 18)
+      return { label: "Best", color: "bg-green-500 text-gray-900" };
+    if (rank >= 14)
+      return { label: "Better", color: "bg-yellow-400 text-gray-900" };
+    if (rank >= 10)
+      return { label: "Good", color: "bg-blue-400 text-gray-900" };
+    return { label: "Fair", color: "bg-gray-500 text-gray-100" };
+  };
+
   return (
     <div className="bg-gray-900 min-h-screen flex flex-col md:flex-row gap-6 items-stretch p-6 text-gray-100">
+      {/* Left Sidebar */}
       <div className="bg-gray-800 p-6 rounded-lg shadow-lg w-full md:w-96">
         <h2 className="text-2xl font-semibold text-center mb-6">
           Generate Domain Names
         </h2>
         <div className="space-y-4">
+          {/* Keywords Input */}
           <div>
             <label className="block text-sm font-medium text-gray-300">
               Key Words
@@ -98,6 +74,7 @@ const DomainGenerator = () => {
             />
           </div>
 
+          {/* TLD Select */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
               Top Level Domain
@@ -130,6 +107,7 @@ const DomainGenerator = () => {
             </div>
           </div>
 
+          {/* Vibe Select */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
               Vibe
@@ -162,6 +140,7 @@ const DomainGenerator = () => {
             </div>
           </div>
 
+          {/* Generate Button */}
           <button
             onClick={generateCards}
             disabled={loading}
@@ -174,6 +153,7 @@ const DomainGenerator = () => {
         </div>
       </div>
 
+      {/* Right Results Section */}
       <div className="flex-1 bg-gray-800 p-6 rounded-lg shadow-lg overflow-auto">
         {items.length > 0 ? (
           <>
@@ -181,29 +161,42 @@ const DomainGenerator = () => {
               Generated Domains:
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {items.map((item, index) => (
-                <div
-                  key={`${item.domain}${item.tld}-${index}`}
-                  className="bg-gray-700 p-4 rounded-lg shadow hover:shadow-md transition"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-lg font-semibold text-indigo-400">
-                      {item.domain}
-                      {item.tld}
-                    </h4>
-                    <span
-                      className={`px-2 py-1 text-xs rounded-full ${
-                        item.available
-                          ? "bg-green-500 text-gray-900"
-                          : "bg-red-500 text-gray-100"
-                      }`}
-                    >
-                      {item.available ? "Available" : "Taken"}
-                    </span>
+              {items.map((item, index) => {
+                const { label, color } = getRankLabel(item.rank || 0);
+                return (
+                  <div
+                    key={`${item.domain}${item.tld}-${index}`}
+                    className="bg-gray-700 p-4 rounded-lg shadow hover:shadow-md transition"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-lg font-semibold text-indigo-400">
+                        {item.domain}
+                        {item.tld}
+                      </h4>
+                      <span
+                        className={`px-2 py-1 text-xs rounded-full ${color}`}
+                      >
+                        {label}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span
+                        className={`px-2 py-1 text-xs rounded-full ${
+                          item.available
+                            ? "bg-green-500 text-gray-900"
+                            : "bg-red-500 text-gray-100"
+                        }`}
+                      >
+                        {item.available ? "Available" : "Taken"}
+                      </span>
+                      <span className="text-sm text-gray-400">
+                        Rank: {item.rank ?? "N/A"}
+                      </span>
+                    </div>
+                    <p className="text-gray-300 text-sm">{item.reason}</p>
                   </div>
-                  <p className="text-gray-300 text-sm">{item.reason}</p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         ) : (

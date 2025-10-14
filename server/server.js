@@ -420,6 +420,7 @@ function routingFunction(state) {
 
   if (state.decision === "rank") return "rank";
   if (state.decision === "trademark") return "trademark";
+  console.log("No valid decision made, defaulting to 'rank'");
   return "rank";
 }
 
