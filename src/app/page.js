@@ -33,7 +33,7 @@ const DomainGenerator = () => {
 
       const data = await response.json();
       console.log("RAW:", data);
-      setItems(data?.result?.ranked || []); // Access ranked array
+      setItems(data?.result?.ranked || data?.result?.trademarks || []); // Access ranked array
     } catch (err) {
       setError(err.message || "An error occurred. Please try again.");
     } finally {
@@ -162,7 +162,24 @@ const DomainGenerator = () => {
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {items.map((item, index) => {
-                const { label, color } = getRankLabel(item.rank || 0);
+                let label, color;
+
+                if (item.trademarkStatus) {
+                  // Trademark node result
+                  if (
+                    item.trademarkStatus.toLowerCase().includes("clear") ||
+                    item.trademarkStatus.toLowerCase().includes("✅")
+                  ) {
+                    label = "Clear";
+                    color = "bg-green-500 text-gray-900";
+                  } else {
+                    label = "Potential Conflict";
+                    color = "bg-red-500 text-gray-100";
+                  }
+                } else {
+                  // Ranking node result
+                  ({ label, color } = getRankLabel(item.rank || 0));
+                }
                 return (
                   <div
                     key={`${item.domain}${item.tld}-${index}`}
@@ -190,7 +207,9 @@ const DomainGenerator = () => {
                         {item.available ? "Available" : "Taken"}
                       </span>
                       <span className="text-sm text-gray-400">
-                        Rank: {item.rank ?? "N/A"}
+                        {item.trademarkStatus
+                          ? `Trademark: ${item.trademarkStatus}`
+                          : `Rank: ${item.rank ?? "N/A"}`}
                       </span>
                     </div>
                     <p className="text-gray-300 text-sm">{item.reason}</p>
