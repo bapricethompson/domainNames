@@ -239,6 +239,7 @@ const decisionTool = new MakeDecisionTool();
 const graphStateData = {
   query: "",
   result: "",
+  decision: "",
   //toolResults: [],
   //domainsChecked: false,
 };
@@ -312,6 +313,8 @@ async function domainNode(state) {
 
 async function domainDecisionNode(state) {
   console.log("DECISION NODE STATE:", state);
+
+  // Ask the LLM to use the decision tool
   const message = new HumanMessage({
     content: [
       {
@@ -320,16 +323,35 @@ async function domainDecisionNode(state) {
       },
     ],
   });
-  console.log("im here");
+
+  // Bind the MakeDecisionTool to the LLM
   const llmWithTool = llm.bind({ tools: [decisionTool] });
+
+  // Run the model
   const response = await llmWithTool.invoke([message]);
-  console.log("DECISION NODE LLM RESPONSE:", response.tool_calls?.[0]);
 
-  const decision = response.content.match(/rank|trademark/i)?.[0] || "rank";
+  // Check if the model tried to call the tool
+  const toolCall = response.tool_calls?.[0];
+  console.log("DECISION NODE LLM RESPONSE:", toolCall);
 
-  state.decision = decision;
+  let decision = "rank";
+
+  if (toolCall && toolCall.name === "makeDecision") {
+    const result = await decisionTool._call(toolCall.args || {});
+    console.log("DecisionTool executed successfully:", result);
+    decision = result;
+  } else {
+    console.log("LLM did not call tool, defaulting to random manual choice");
+    const options = ["rank", "trademark"];
+    decision = options[Math.floor(Math.random() * options.length)];
+  }
+
+  console.log("✅ FINAL DECISION:", decision);
+
+  // Return updated state
   return {
     ...state,
+    decision,
   };
 }
 
@@ -485,6 +507,20 @@ async function domainTrademarkNode(state) {
 
 function routingFunction(state) {
   console.log("ROUTING FUNCTION STATE:", state);
+  console.log("toolCalls:", state.toolCalls);
+  // if (toolCall && toolCall.name == "Heads") {
+  //   console.log("ROUTING TO heads");
+  //   return "heads";
+  // } else if (toolCall && toolCall.name == "Tails") {
+  //   console.log("ROUTING TO tails");
+  //   return "tails";
+  // } else if (toolCall && toolCall.name == "CoinFlipper") {
+  //   console.log("ROUTING TO evaluateCoinFlip");
+  //   return "evaluateCoinFlip";
+  // } else {
+  //   console.log("ROUTING TO failure");
+  //   return "failure";
+  // }
 
   if (state.decision === "rank") return "rank";
   if (state.decision === "trademark") return "trademark";
@@ -496,14 +532,14 @@ const workflow = new StateGraph({ channels: graphStateData });
 
 // step 2: define nodes
 workflow.addNode("domains", domainNode);
-workflow.addNode("decision", domainDecisionNode);
+workflow.addNode("makeDecision", domainDecisionNode);
 workflow.addNode("rank", domainRankingNode);
 workflow.addNode("trademark", domainTrademarkNode);
 
 // step 3: define edges
 workflow.addEdge(START, "domains");
-workflow.addEdge("domains", "decision");
-workflow.addConditionalEdges("decision", routingFunction, [
+workflow.addEdge("domains", "makeDecision");
+workflow.addConditionalEdges("makeDecision", routingFunction, [
   "rank",
   "trademark",
 ]);
